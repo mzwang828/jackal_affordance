@@ -1,11 +1,14 @@
  <launch>
-   <node pkg="jackal_affordance" type="affordance_detect" name="affordance_detect">
+   <node pkg="jackal_affordance" type="affordance_detect" name="jackal_affordance_detect" output="screen">
      <rosparam>
-       info_topic: /camera/rgb/camera_info
+       info_topic: /camera/rgb/camera_info1
        rgb_topic: /camera/rgb/image_raw
        point_cloud_topic: /voxel_cloud
-       fixed_frame: camera_link
-       min_plane_size: 5000
+       fixed_frame: /map
+       min_plane_size: 2000
+       min_seg_size: 5000
+       seed_resolution: 0.5
+       voxel_resolution: 0.025
      </rosparam>
    </node>
  </launch>

@@ -1,8 +1,10 @@
 #include <iostream>
 #include <math.h>
+#include <random>
 #include <pcl/ModelCoefficients.h>
 #include <pcl/common/common_headers.h>
 #include <pcl/common/common.h>
+#include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
 #include <pcl/sample_consensus/method_types.h>
@@ -15,13 +17,15 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <pcl_ros/transforms.h>
-#include <pcl_ros/point_cloud.h>
 #include <image_geometry/pinhole_camera_model.h>
 #include <visualization_msgs/Marker.h>
 
 #include <ros/ros.h>
 #include <tf/transform_listener.h>
+#include <tf_conversions/tf_eigen.h>
+#include "tf/transform_datatypes.h"
+#include "Eigen/Core"
+#include "Eigen/Geometry"
 
 #include "jackal_affordance/Plane.h"
 #include "jackal_affordance/AffordanceDetection.h"
@@ -39,12 +43,17 @@ class AffordanceDetect
         nh_.getParam("point_cloud_topic", point_cloud_topic_);
         nh_.getParam("fixed_frame", fixed_frame_);
         nh_.getParam("min_plane_size", min_plane_size_);
+        nh_.getParam("min_seg_size", min_seg_size_);
+        nh_.getParam("seed_resolution", seed_res_);
+        nh_.getParam("voxel_resolution", voxel_res_);
 
         marker_pub_ = nh_.advertise<visualization_msgs::Marker>("affordance_visual_marking", 10);
-        info_sub_ = nh_.subscribe(info_topic_, 10, &AffordanceDetect::info_callback, this);
+        //info_sub_ = nh_.subscribe(info_topic_, 10, &AffordanceDetect::info_callback, this);
         rgb_sub_ = nh_.subscribe(rgb_topic_, 10, &AffordanceDetect::rgb_callback, this);
         point_cloud_sub_ = nh_.subscribe(point_cloud_topic_, 10, &AffordanceDetect::point_cloud_callback, this);
-        affordance_detection_srv_ = nh_.advertiseService("affordance_detection", &AffordanceDetect::affordance_detection_callback, this);
+        affordance_detection_srv_ = nh_.advertiseService("affordance_detect", &AffordanceDetect::affordance_detect_callback, this);
+
+        debug_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("debug_cloud", 10);
     }
 
     void info_callback(const sensor_msgs::CameraInfoConstPtr &msg)
@@ -59,12 +68,11 @@ class AffordanceDetect
     bool planar_segmentation(std::vector<jackal_affordance::Plane> &Planes, pcl::PointCloud<PointT>::Ptr cloud_input, char orientation)
     {
         pcl::PointCloud<PointT> plane_clouds;
-        plane_clouds.header.frame_id = cloud_transformed_->header.frame_id;
+        plane_clouds.header.frame_id = fixed_frame_;
         jackal_affordance::Plane plane_object_msg;
 
         pcl::PointCloud<PointT>::Ptr cloud_plane(new pcl::PointCloud<PointT>);
         pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
-
         // Create the segmentation object
         // Optional
         seg_.setOptimizeCoefficients(true);
@@ -95,7 +103,6 @@ class AffordanceDetect
                 std::cout << "PCP: no plane found!!!" << std::endl;
                 return false;
             }
-
             else if (inliers->indices.size() < min_plane_size_)
             {
                 break;
@@ -110,7 +117,6 @@ class AffordanceDetect
             chull_.setInputCloud(cloud_plane);
             chull_.setDimension(2);
             chull_.reconstruct(*cloud_hull);
-
             Eigen::Vector4f center;
             pcl::compute3DCentroid(*cloud_hull, center);
 
@@ -191,7 +197,6 @@ class AffordanceDetect
         //get cube orientation
         geometry_msgs::Quaternion orientation;
         orientation = this->calculate_quaternion(marker_to_be_pub);
-
         visualization_msgs::Marker marker;
         marker.header.frame_id = fixed_frame_;
         marker.header.stamp = ros::Time();
@@ -204,23 +209,23 @@ class AffordanceDetect
         marker.pose.position.y = marker_to_be_pub.center.y;
         marker.pose.position.z = marker_to_be_pub.center.z;
         marker.pose.orientation = orientation;
-        marker.scale.x = 0.32;
-        marker.scale.y = 1;
+        marker.scale.x = 0.02;
+        marker.scale.y = length;
         marker.scale.z = height;
-        marker.color.a = 1.0; // Don't forget to set the alpha!
+        marker.color.a = 0.8; // Don't forget to set the alpha!
         marker.color.r = 0.0;
         marker.color.g = 1.0;
         marker.color.b = 0.0;
         marker.lifetime = ros::Duration();
         marker_pub_.publish(marker);
-        ROS_INFO("position; %f,%f,%f", marker.pose.position.x, marker.pose.position.y, marker.pose.position.z);
+        //ROS_INFO("position; %f,%f,%f", marker.pose.position.x, marker.pose.position.y, marker.pose.position.z);
     }
 
     // calculate the quaternion rotation between two vector, up_vector and axis_vector
     geometry_msgs::Quaternion calculate_quaternion(jackal_affordance::Plane plane)
     {
         tf::Vector3 axis_vector(plane.normal[0], plane.normal[1], plane.normal[2]);
-        tf::Vector3 up_vector(0.0, 0.0, 1.0);
+        tf::Vector3 up_vector(1.0, 0.0, 0.0);
         tf::Vector3 right_vector = axis_vector.cross(up_vector);
         right_vector.normalized();
         tf::Quaternion q(right_vector, -1.0 * acos(axis_vector.dot(up_vector)));
@@ -232,40 +237,49 @@ class AffordanceDetect
 
     void point_cloud_callback(const sensor_msgs::PointCloud2ConstPtr &msg)
     {
-        // transform point cloud to target_frame
-        sensor_msgs::PointCloud2 cloud_raw = *msg;
-        sensor_msgs::PointCloud2 cloud_transformed;
-        std::string target_frame = cloud_raw.header.frame_id;
+        cloud_raw_ = *msg;
+    }
+
+    bool point_cloud_transform()
+    {
+        cloud_transformed_->clear();
+
+        pcl::PointCloud<PointT>::Ptr cloud_raw_pcl(new pcl::PointCloud<PointT>);
+        pcl::fromROSMsg(cloud_raw_, *cloud_raw_pcl);
+        std::string source_frame = cloud_raw_.header.frame_id;
         tf::TransformListener listener;
-        listener.waitForTransform(fixed_frame_, target_frame, ros::Time(0), ros::Duration(10.0));
+        listener.waitForTransform(fixed_frame_, source_frame, ros::Time(0), ros::Duration(10.0));
         tf::StampedTransform transform;
-        tf::Transform cloud_transform;
+        tf::Transform tf_transform;
+        Eigen::Affine3d eigen_transform;
         try
         {
-            listener.lookupTransform(fixed_frame_, target_frame, ros::Time(0), transform);
-            cloud_transform.setOrigin(transform.getOrigin());
-            cloud_transform.setRotation(transform.getRotation());
-            pcl_ros::transformPointCloud(fixed_frame_, cloud_transform, cloud_raw, cloud_transformed);
-            pcl::fromROSMsg(cloud_transformed, *cloud_transformed_);
+            listener.lookupTransform(fixed_frame_, source_frame, ros::Time(0), transform);
+            tf_transform.setOrigin(transform.getOrigin());
+            tf_transform.setRotation(transform.getRotation());
+            tf::transformTFToEigen(transform, eigen_transform);
+            pcl::transformPointCloud(*cloud_raw_pcl, *cloud_transformed_, eigen_transform);
             std::cout << "Point cloud transformed";
+            return true;
         }
         catch (tf::TransformException ex)
         {
             ROS_ERROR("%s", ex.what());
+            return false;
         }
     }
 
-    bool affordance_detection_callback(jackal_affordance::AffordanceDetection::Request &req,
-                                       jackal_affordance::AffordanceDetection::Response &res)
+    bool primitive_extract()
     {
+        planes_.resize(0);
         // TODO: filter point cloud
 
         //LCCP Segmentation: SuperVoxel + LCCP
         //STEP1: 超体聚类 set parameters
         //voxel_resolution is the resolution (in meters) of voxels used、
         //seed_resolution is the average size (in meters) of resulting supervoxels
-        float voxel_resolution = 0.0075f;
-        float seed_resolution = 0.03f;
+        float voxel_resolution = voxel_res_;
+        float seed_resolution = seed_res_;
         float color_importance = 0.0f;
         float spatial_importance = 1.0f;
         float normal_importance = 4.0f;
@@ -274,7 +288,7 @@ class AffordanceDetect
         unsigned int k_factor = 0;
         // Preparation of Input: Perform Supervoxel Oversegmentation
         pcl::SupervoxelClustering<PointT> super(voxel_resolution, seed_resolution);
-        super.setUseSingleCameraTransform (use_single_cam_transform);
+        super.setUseSingleCameraTransform(use_single_cam_transform);
         super.setInputCloud(cloud_transformed_);
         //Set the importance of color for supervoxels.
         super.setColorImportance(color_importance);
@@ -311,36 +325,79 @@ class AffordanceDetect
         lccp.relabelCloud(*lccp_labeled_cloud);
         SuperVoxelAdjacencyList sv_adjacency_list;
         lccp.getSVAdjacencyList(sv_adjacency_list); // Needed for visualization
-        //create sensor msgs for visual in RVIZ
-        pcl::toROSMsg(*lccp_labeled_cloud, lccp_labeled_cloud_); //To be published
-        //retrieve each segmentation and perform pirmitive extraction
+        //retrieve each segmentation and perform pirmitive extraction, also color the segmentations for RViz
         int label_max = 0; //count numbers of segmentations
-        std::vector<jackal_affordance::Plane> Planes;
         for (int i = 0; i < lccp_labeled_cloud->size(); i++)
         {
             if (lccp_labeled_cloud->points[i].label > label_max)
                 label_max = lccp_labeled_cloud->points[i].label;
         }
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr ColoredCloud2(new pcl::PointCloud<pcl::PointXYZRGB>);
+        ColoredCloud2->height = 1;
+        ColoredCloud2->width = lccp_labeled_cloud->size();
+        ColoredCloud2->resize(lccp_labeled_cloud->size());
         for (int i = 0; i <= label_max; i++)
         {
+            const int range_from = 0;
+            const int range_to = 255;
+            std::random_device rand_dev;
+            std::mt19937 generator(rand_dev());
+            std::uniform_int_distribution<int> distr(range_from, range_to);
+
+            int color_R = distr(generator);
+            int color_G = distr(generator);
+            int color_B = distr(generator);
+
             pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_temp(new pcl::PointCloud<pcl::PointXYZ>);
             for (int j = 0; j < lccp_labeled_cloud->size(); j++)
             {
                 if (lccp_labeled_cloud->points[j].label == i)
                 {
+                    ColoredCloud2->points[j].x = lccp_labeled_cloud->points[j].x;
+                    ColoredCloud2->points[j].y = lccp_labeled_cloud->points[j].y;
+                    ColoredCloud2->points[j].z = lccp_labeled_cloud->points[j].z;
+                    ColoredCloud2->points[j].r = color_R;
+                    ColoredCloud2->points[j].g = color_G;
+                    ColoredCloud2->points[j].b = color_B;
+
                     pcl::PointXYZ temp;
                     temp.x = lccp_labeled_cloud->points[j].x;
                     temp.y = lccp_labeled_cloud->points[j].y;
                     temp.z = lccp_labeled_cloud->points[j].z;
                     cloud_temp->push_back(temp);
                 }
-                this->planar_segmentation(Planes, cloud_temp, 'v');
             }
+            ROS_INFO("cloud_temp size: %d", cloud_temp->size());
+            if (cloud_temp->size() > min_seg_size_)
+                this->planar_segmentation(planes_, cloud_temp, 'v');
             //Find Primitives in Segmentations
-            for (int i = 0; i < Planes.size(); i++)
+            for (int i = 0; i < planes_.size(); i++)
             {
-                this->marker_publish(Planes[i], i);
+                this->marker_publish(planes_[i], i);
             }
+        }
+
+        std::cout << "LCCP: # of input point cloud: " << lccp_labeled_cloud->size() << ", # of segmentations: " << label_max << std::endl;
+        pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
+        lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+        debug_cloud_pub_.publish(lccp_labeled_cloud_);
+
+        std::cout << "AD: # of planes found: " << planes_.size() << std::endl;
+        return true;
+    }
+
+    bool affordance_detect_callback(jackal_affordance::AffordanceDetection::Request &req,
+                                    jackal_affordance::AffordanceDetection::Response &res)
+    {
+        if (!point_cloud_transform())
+        {
+            std::cout << "AD: couldn't transform point cloud!" << std::endl;
+            return false;
+        }
+        if (!primitive_extract())
+        {
+            std::cout << "AD: couldn't extract primitive!" << std::endl;
+            return false;
         }
         res.success = true;
         return true;
@@ -349,18 +406,20 @@ class AffordanceDetect
   private:
     ros::NodeHandle nh_;
     ros::Subscriber info_sub_, rgb_sub_, point_cloud_sub_;
-    ros::Publisher marker_pub_;
+    ros::Publisher marker_pub_, debug_cloud_pub_;
     ros::ServiceServer affordance_detection_srv_;
     pcl::PointCloud<PointT>::Ptr cloud_transformed_, cloud_hull_;
-    sensor_msgs::PointCloud2 lccp_labeled_cloud_;
+    sensor_msgs::PointCloud2 cloud_raw_, lccp_labeled_cloud_;
     image_geometry::PinholeCameraModel model1_;
 
     pcl::SACSegmentation<PointT> seg_;
     pcl::ExtractIndices<PointT> extract_;
     pcl::ConvexHull<PointT> chull_;
 
-    int min_plane_size_;
+    int min_plane_size_, min_seg_size_;
+    float seed_res_, voxel_res_;
     std::string info_topic_, rgb_topic_, point_cloud_topic_, fixed_frame_;
+    std::vector<jackal_affordance::Plane> planes_;
 };
 
 main(int argc, char **argv)
@@ -370,7 +429,7 @@ main(int argc, char **argv)
 
     AffordanceDetect affordance_detect(n);
     ROS_INFO("Affordance Detection Service Initialized");
-    
+
     ros::spin();
 
     return 0;

@@ -5,7 +5,7 @@
        rgb_topic: /camera/rgb/image_raw
        point_cloud_topic: /voxel_cloud
        fixed_frame: /map
-       min_plane_size: 2000
+       min_plane_size: 3000
        min_seg_size: 5000
        seed_resolution: 0.5
        voxel_resolution: 0.025

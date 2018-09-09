@@ -1,0 +1,10 @@
+#goal definition
+geometry_msgs/Point center
+float64[3] normal
+---
+#result definition
+bool movable
+---
+#feedback
+geometry_msgs/Point center
+float64[3] normal

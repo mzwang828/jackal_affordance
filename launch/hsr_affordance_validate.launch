@@ -1,0 +1,15 @@
+ <launch>
+   <node pkg="jackal_affordance" type="affordance_validate" name="hsr_affordance_validate" output="screen">
+     <rosparam>
+       info_topic: /hsrb/head_rgbd_sensor/rgb/camera_info
+       depth_topic: /hsrb/head_rgbd_sensor/depth_registered/image_rect_raw
+       point_cloud_topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points
+       fixed_frame: map
+       force_sensor_topic: /hsrb/wrist_wrench/raw
+       velocity_topic: /hsrb/command_velocity
+       arm_trajectory_topic: /hsrb/arm_trajectory_controller/follow_joint_trajectory
+       force_max: 100
+       force_min: 36
+     </rosparam>
+   </node>
+ </launch>

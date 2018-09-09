@@ -28,7 +28,7 @@
 #include "Eigen/Geometry"
 
 #include "jackal_affordance/Plane.h"
-#include "jackal_affordance/AffordanceDetection.h"
+#include "jackal_affordance/AffordanceDetect.h"
 
 typedef pcl::PointXYZ PointT;
 typedef pcl::LCCPSegmentation<PointT>::SupervoxelAdjacencyList SuperVoxelAdjacencyList;
@@ -43,6 +43,7 @@ class AffordanceDetect
         nh_.getParam("point_cloud_topic", point_cloud_topic_);
         nh_.getParam("fixed_frame", fixed_frame_);
         nh_.getParam("min_plane_size", min_plane_size_);
+        nh_.getParam("max_plane_area", max_plane_area_);
         nh_.getParam("min_seg_size", min_seg_size_);
         nh_.getParam("seed_resolution", seed_res_);
         nh_.getParam("voxel_resolution", voxel_res_);
@@ -124,7 +125,7 @@ class AffordanceDetect
             pcl::getMinMax3D(*cloud_plane, min_vals, max_vals);
 
             // Get cloud
-            pcl::toROSMsg(*cloud_plane, plane_object_msg.cloud);
+            // pcl::toROSMsg(*cloud_plane, plane_object_msg.cloud);
 
             // Construct plane object msg
             pcl_conversions::fromPCL(cloud_plane->header, plane_object_msg.header);
@@ -160,12 +161,12 @@ class AffordanceDetect
             plane_object_msg.coef[3] = coefficients->values[3];
 
             // Get plane normal
-            float length = sqrt(coefficients->values[0] * coefficients->values[0] +
-                                coefficients->values[1] * coefficients->values[1] +
-                                coefficients->values[2] * coefficients->values[2]);
-            plane_object_msg.normal[0] = coefficients->values[0] / length;
-            plane_object_msg.normal[1] = coefficients->values[1] / length;
-            plane_object_msg.normal[2] = coefficients->values[2] / length;
+            float mag = sqrt(coefficients->values[0] * coefficients->values[0] +
+                             coefficients->values[1] * coefficients->values[1] +
+                             coefficients->values[2] * coefficients->values[2]);
+            plane_object_msg.normal[0] = coefficients->values[0] / mag;
+            plane_object_msg.normal[1] = coefficients->values[1] / mag;
+            plane_object_msg.normal[2] = coefficients->values[2] / mag;
 
             plane_object_msg.size.data = cloud_plane->points.size();
             if (orientation == 'v')
@@ -173,11 +174,20 @@ class AffordanceDetect
             else
                 plane_object_msg.is_vertical = false;
 
-            std::cout << "PCP: " << no_planes << ". plane segmented! # of points: "
-                      << inliers->indices.size() << " axis: " << axis << std::endl;
-            no_planes++;
+            float height = plane_object_msg.max.z - plane_object_msg.min.z;
+            float length = sqrt((plane_object_msg.max.x - plane_object_msg.min.x) * (plane_object_msg.max.x - plane_object_msg.min.x) +
+                                (plane_object_msg.max.y - plane_object_msg.min.y) * (plane_object_msg.max.y - plane_object_msg.min.y));
 
-            Planes.push_back(plane_object_msg);
+            float plane_area = height * length;
+
+            if (plane_area < max_plane_area_)
+            {
+                std::cout << "PCP: " << no_planes << ". plane segmented! # of points: "
+                          << inliers->indices.size() << " axis: " << axis << std::endl;
+                no_planes++;
+
+                Planes.push_back(plane_object_msg);
+            }
             extract_.setNegative(true);
             extract_.filter(*cloud_input);
 
@@ -213,8 +223,8 @@ class AffordanceDetect
         marker.scale.y = length;
         marker.scale.z = height;
         marker.color.a = 0.8; // Don't forget to set the alpha!
-        marker.color.r = 0.0;
-        marker.color.g = 1.0;
+        marker.color.r = 1.0;
+        marker.color.g = 0.65;
         marker.color.b = 0.0;
         marker.lifetime = ros::Duration();
         marker_pub_.publish(marker);
@@ -241,6 +251,7 @@ class AffordanceDetect
     }
 
     bool point_cloud_transform()
+    // transform the point cloud to target frame, which is /map in most cases
     {
         cloud_transformed_->clear();
 
@@ -377,17 +388,23 @@ class AffordanceDetect
             }
         }
 
-        std::cout << "LCCP: # of input point cloud: " << lccp_labeled_cloud->size() << ", # of segmentations: " << label_max << std::endl;
-        pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
-        lccp_labeled_cloud_.header.frame_id = fixed_frame_;
-        debug_cloud_pub_.publish(lccp_labeled_cloud_);
+        if (planes_.size() != 0)
+        {
+            std::cout << "LCCP: # of input point cloud: " << lccp_labeled_cloud->size() << ", # of segmentations: " << label_max << std::endl;
+            pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
+            lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+            debug_cloud_pub_.publish(lccp_labeled_cloud_);
 
-        std::cout << "AD: # of planes found: " << planes_.size() << std::endl;
-        return true;
+            std::cout << "AD: # of planes found: " << planes_.size() << std::endl;
+            return true;
+        }
+        else
+            return false;
+        std::cout << "No plane found: " << planes_.size() << std::endl;
     }
 
-    bool affordance_detect_callback(jackal_affordance::AffordanceDetection::Request &req,
-                                    jackal_affordance::AffordanceDetection::Response &res)
+    bool affordance_detect_callback(jackal_affordance::AffordanceDetect::Request &req,
+                                    jackal_affordance::AffordanceDetect::Response &res)
     {
         if (!point_cloud_transform())
         {
@@ -399,6 +416,7 @@ class AffordanceDetect
             std::cout << "AD: couldn't extract primitive!" << std::endl;
             return false;
         }
+        res.planes = planes_;
         res.success = true;
         return true;
     }
@@ -416,7 +434,7 @@ class AffordanceDetect
     pcl::ExtractIndices<PointT> extract_;
     pcl::ConvexHull<PointT> chull_;
 
-    int min_plane_size_, min_seg_size_;
+    int min_plane_size_, min_seg_size_, max_plane_area_;
     float seed_res_, voxel_res_;
     std::string info_topic_, rgb_topic_, point_cloud_topic_, fixed_frame_;
     std::vector<jackal_affordance::Plane> planes_;

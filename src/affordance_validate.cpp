@@ -229,7 +229,6 @@ class AffordanceValidate
                 velocity_pub_.publish(tw);
                 ROS_INFO("Force difference: %f", force_[2] - force_at_start);
             }
-            ROS_INFO("waaaaaaaaaaa");
             tw.linear.x = 0.0;
             velocity_pub_.publish(tw);
             ros::Duration(1).sleep();
@@ -247,7 +246,7 @@ class AffordanceValidate
         }
 
         result_.movable = movable_;
-        ROS_INFO("%s: Succeeded", action_name_.c_str());
+        ROS_INFO("%s: Action Executed Succeeded", action_name_.c_str());
         // set the action state to succeeded
         validate_server_.setSucceeded(result_);
 

@@ -5,10 +5,10 @@
        rgb_topic: /hsrb/head_rgbd_sensor/rgb/image_rect_color
        point_cloud_topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points
        fixed_frame: map
-       min_plane_size: 3000
+       min_primitive_size: 3000
        max_plane_area: 5
        min_seg_size: 5000
-       seed_resolution: 0.5
+       seed_resolution: 0.3
        voxel_resolution: 0.025
      </rosparam>
    </node>

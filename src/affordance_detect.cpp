@@ -13,6 +13,7 @@
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/supervoxel_clustering.h>
 #include <pcl/segmentation/lccp_segmentation.h>
+#include <pcl/features/normal_3d.h>
 #include <pcl/surface/convex_hull.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
@@ -27,7 +28,7 @@
 #include "Eigen/Core"
 #include "Eigen/Geometry"
 
-#include "jackal_affordance/Plane.h"
+#include "jackal_affordance/Primitive.h"
 #include "jackal_affordance/AffordanceDetect.h"
 
 typedef pcl::PointXYZ PointT;
@@ -36,13 +37,13 @@ typedef pcl::LCCPSegmentation<PointT>::SupervoxelAdjacencyList SuperVoxelAdjacen
 class AffordanceDetect
 {
   public:
-    AffordanceDetect(ros::NodeHandle n) : nh_(n), cloud_transformed_(new pcl::PointCloud<PointT>), cloud_hull_(new pcl::PointCloud<PointT>)
+    AffordanceDetect(ros::NodeHandle n) : nh_(n), cloud_transformed_(new pcl::PointCloud<PointT>), cloud_hull_(new pcl::PointCloud<PointT>), tree_(new pcl::search::KdTree<PointT>())
     {
         nh_.getParam("info_topic", info_topic_);
         nh_.getParam("rgb_topic", rgb_topic_);
         nh_.getParam("point_cloud_topic", point_cloud_topic_);
         nh_.getParam("fixed_frame", fixed_frame_);
-        nh_.getParam("min_plane_size", min_plane_size_);
+        nh_.getParam("min_primitive_size", min_primitive_size_);
         nh_.getParam("max_plane_area", max_plane_area_);
         nh_.getParam("min_seg_size", min_seg_size_);
         nh_.getParam("seed_resolution", seed_res_);
@@ -53,8 +54,8 @@ class AffordanceDetect
         rgb_sub_ = nh_.subscribe(rgb_topic_, 10, &AffordanceDetect::rgb_callback, this);
         point_cloud_sub_ = nh_.subscribe(point_cloud_topic_, 10, &AffordanceDetect::point_cloud_callback, this);
         affordance_detection_srv_ = nh_.advertiseService("affordance_detect", &AffordanceDetect::affordance_detect_callback, this);
-
-        debug_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("debug_cloud", 10);
+        lccp_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("lccp_cloud", 10);
+        primitive_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("primitive_cloud", 10);
     }
 
     void info_callback(const sensor_msgs::CameraInfoConstPtr &msg)
@@ -64,185 +65,6 @@ class AffordanceDetect
 
     void rgb_callback(const sensor_msgs::ImageConstPtr &msg)
     {
-    }
-
-    bool planar_segmentation(std::vector<jackal_affordance::Plane> &Planes, pcl::PointCloud<PointT>::Ptr cloud_input, char orientation)
-    {
-        pcl::PointCloud<PointT> plane_clouds;
-        plane_clouds.header.frame_id = fixed_frame_;
-        jackal_affordance::Plane plane_object_msg;
-
-        pcl::PointCloud<PointT>::Ptr cloud_plane(new pcl::PointCloud<PointT>);
-        pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
-        // Create the segmentation object
-        // Optional
-        seg_.setOptimizeCoefficients(true);
-        // Mandatory set plane to be parallel to Z axis within a 10 degrees tolerance
-        Eigen::Vector3f axis = Eigen::Vector3f(0.0, 0.0, 1.0); //z axis
-        seg_.setAxis(axis);
-        seg_.setMaxIterations(500); // iteration limits decides segmentation goodness
-        seg_.setMethodType(pcl::SAC_RANSAC);
-        seg_.setEpsAngle(pcl::deg2rad(10.0f));
-        seg_.setDistanceThreshold(0.01);
-        if (orientation == 'v')
-        {
-            seg_.setModelType(pcl::SACMODEL_PARALLEL_PLANE);
-        }
-        else
-        {
-            seg_.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
-        }
-        int no_planes = 1;
-        while (true)
-        {
-            pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
-            pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-            seg_.setInputCloud(cloud_input);
-            seg_.segment(*inliers, *coefficients);
-            if (inliers->indices.size() == 0 and no_planes == 0)
-            {
-                std::cout << "PCP: no plane found!!!" << std::endl;
-                return false;
-            }
-            else if (inliers->indices.size() < min_plane_size_)
-            {
-                break;
-            }
-            extract_.setInputCloud(cloud_input);
-            extract_.setNegative(false);
-            extract_.setIndices(inliers);
-            extract_.filter(*cloud_plane);
-
-            plane_clouds += *cloud_plane;
-
-            chull_.setInputCloud(cloud_plane);
-            chull_.setDimension(2);
-            chull_.reconstruct(*cloud_hull);
-            Eigen::Vector4f center;
-            pcl::compute3DCentroid(*cloud_hull, center);
-
-            Eigen::Vector4f min_vals, max_vals;
-            pcl::getMinMax3D(*cloud_plane, min_vals, max_vals);
-
-            // Get cloud
-            // pcl::toROSMsg(*cloud_plane, plane_object_msg.cloud);
-
-            // Construct plane object msg
-            pcl_conversions::fromPCL(cloud_plane->header, plane_object_msg.header);
-
-            // Get plane center
-            plane_object_msg.center.x = center[0];
-            plane_object_msg.center.y = center[1];
-            plane_object_msg.center.z = center[2];
-
-            // Get plane min and max values
-            plane_object_msg.min.x = min_vals[0];
-            plane_object_msg.min.y = min_vals[1];
-            plane_object_msg.min.z = min_vals[2];
-
-            plane_object_msg.max.x = max_vals[0];
-            plane_object_msg.max.y = max_vals[1];
-            plane_object_msg.max.z = max_vals[2];
-
-            // Get plane polygon
-            for (int i = 0; i < cloud_hull->points.size(); i++)
-            {
-                geometry_msgs::Point32 p;
-                p.x = cloud_hull->points[i].x;
-                p.y = cloud_hull->points[i].y;
-                p.z = cloud_hull->points[i].z;
-                plane_object_msg.polygon.push_back(p);
-            }
-
-            // Get plane coefficients
-            plane_object_msg.coef[0] = coefficients->values[0];
-            plane_object_msg.coef[1] = coefficients->values[1];
-            plane_object_msg.coef[2] = coefficients->values[2];
-            plane_object_msg.coef[3] = coefficients->values[3];
-
-            // Get plane normal
-            float mag = sqrt(coefficients->values[0] * coefficients->values[0] +
-                             coefficients->values[1] * coefficients->values[1] +
-                             coefficients->values[2] * coefficients->values[2]);
-            plane_object_msg.normal[0] = coefficients->values[0] / mag;
-            plane_object_msg.normal[1] = coefficients->values[1] / mag;
-            plane_object_msg.normal[2] = coefficients->values[2] / mag;
-
-            plane_object_msg.size.data = cloud_plane->points.size();
-            if (orientation == 'v')
-                plane_object_msg.is_vertical = true;
-            else
-                plane_object_msg.is_vertical = false;
-
-            float height = plane_object_msg.max.z - plane_object_msg.min.z;
-            float length = sqrt((plane_object_msg.max.x - plane_object_msg.min.x) * (plane_object_msg.max.x - plane_object_msg.min.x) +
-                                (plane_object_msg.max.y - plane_object_msg.min.y) * (plane_object_msg.max.y - plane_object_msg.min.y));
-
-            float plane_area = height * length;
-
-            if (plane_area < max_plane_area_)
-            {
-                std::cout << "PCP: " << no_planes << ". plane segmented! # of points: "
-                          << inliers->indices.size() << " axis: " << axis << std::endl;
-                no_planes++;
-
-                Planes.push_back(plane_object_msg);
-            }
-            extract_.setNegative(true);
-            extract_.filter(*cloud_input);
-
-            ros::Duration(0.2).sleep();
-        }
-
-        return true;
-    }
-
-    void marker_publish(jackal_affordance::Plane marker_to_be_pub, int id)
-    {
-        // get cube dimension
-        float height = marker_to_be_pub.max.z - marker_to_be_pub.min.z;
-        float length = sqrt((marker_to_be_pub.max.x - marker_to_be_pub.min.x) * (marker_to_be_pub.max.x - marker_to_be_pub.min.x) +
-                            (marker_to_be_pub.max.y - marker_to_be_pub.min.y) * (marker_to_be_pub.max.y - marker_to_be_pub.min.y));
-
-        //get cube orientation
-        geometry_msgs::Quaternion orientation;
-        orientation = this->calculate_quaternion(marker_to_be_pub);
-        visualization_msgs::Marker marker;
-        marker.header.frame_id = fixed_frame_;
-        marker.header.stamp = ros::Time();
-        marker.ns = "my_namespace";
-        marker.id = id;
-        marker.type = visualization_msgs::Marker::CUBE;
-        marker.action = visualization_msgs::Marker::ADD;
-        // create a tf transform to translate the face of cylinder to detected position
-        marker.pose.position.x = marker_to_be_pub.center.x;
-        marker.pose.position.y = marker_to_be_pub.center.y;
-        marker.pose.position.z = marker_to_be_pub.center.z;
-        marker.pose.orientation = orientation;
-        marker.scale.x = 0.02;
-        marker.scale.y = length;
-        marker.scale.z = height;
-        marker.color.a = 0.8; // Don't forget to set the alpha!
-        marker.color.r = 1.0;
-        marker.color.g = 0.65;
-        marker.color.b = 0.0;
-        marker.lifetime = ros::Duration();
-        marker_pub_.publish(marker);
-        //ROS_INFO("position; %f,%f,%f", marker.pose.position.x, marker.pose.position.y, marker.pose.position.z);
-    }
-
-    // calculate the quaternion rotation between two vector, up_vector and axis_vector
-    geometry_msgs::Quaternion calculate_quaternion(jackal_affordance::Plane plane)
-    {
-        tf::Vector3 axis_vector(plane.normal[0], plane.normal[1], plane.normal[2]);
-        tf::Vector3 up_vector(1.0, 0.0, 0.0);
-        tf::Vector3 right_vector = axis_vector.cross(up_vector);
-        right_vector.normalized();
-        tf::Quaternion q(right_vector, -1.0 * acos(axis_vector.dot(up_vector)));
-        q.normalize();
-        geometry_msgs::Quaternion cylinder_orientation;
-        tf::quaternionTFToMsg(q, cylinder_orientation);
-        return cylinder_orientation;
     }
 
     void point_cloud_callback(const sensor_msgs::PointCloud2ConstPtr &msg)
@@ -280,11 +102,276 @@ class AffordanceDetect
         }
     }
 
+    int maximum(int a, int b)
+    {
+        int max = (b < a) ? 0 : 1;
+        return max;
+    }
+
+    bool primitive_segmentation(std::vector<jackal_affordance::Primitive> &primitives, pcl::PointCloud<PointT>::Ptr cloud_input)
+    {
+        // find all primitives from given point cloud input
+        pcl::PointCloud<PointT>::Ptr cloud_primitive(new pcl::PointCloud<PointT>);
+        pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
+        pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
+        // Estimate point normals
+        pcl::PCDWriter writer;
+        writer.write("/home/mzwang/Desktop/lccp_segmented.pcd", *cloud_input, false);
+        ne_.setSearchMethod(tree_);
+        ne_.setInputCloud(cloud_input);
+        ne_.setKSearch(50);
+        ne_.compute(*cloud_normals);
+        // Create the segmentation object
+        // Optional
+        seg_.setOptimizeCoefficients(true);
+        seg_.setMaxIterations(500); // iteration limits decides segmentation goodness
+        seg_.setMethodType(pcl::SAC_RANSAC);
+        seg_.setDistanceThreshold(0.01);
+        seg_.setNormalDistanceWeight(0.1);
+        int no_primitives = 0;
+        while (true)
+        {
+            // coefficients & inliers for cylinder, vertical plane and horizontal plane
+            jackal_affordance::Primitive primitive_msg;
+            pcl::ModelCoefficients::Ptr coefficients_cylinder(new pcl::ModelCoefficients), coefficients_plane(new pcl::ModelCoefficients);
+            pcl::PointIndices::Ptr inliers_cylinder(new pcl::PointIndices), inliers_plane(new pcl::PointIndices);
+            pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+            pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
+            seg_.setInputCloud(cloud_input);
+            seg_.setInputNormals(cloud_normals);
+            // Obtain the plane inliers and coefficients
+            seg_.setModelType(pcl::SACMODEL_NORMAL_PLANE);
+            seg_.segment(*inliers_plane, *coefficients_plane);
+            // Obtain the cylinder inliers and coefficients
+            seg_.setModelType(pcl::SACMODEL_CYLINDER);
+            seg_.setNormalDistanceWeight(0.1);
+            seg_.setMaxIterations(1000);
+            seg_.setDistanceThreshold(0.07);
+            seg_.setRadiusLimits(0, 0.15);
+            seg_.segment(*inliers_cylinder, *coefficients_cylinder);
+
+            //ROS_INFO("vertical plane %d, horizontal %d, cylinder %d", inliers_vplane->indices.size(), inliers_hplane->indices.size(), inliers_cylinder->indices.size());
+            ROS_INFO("plane %d, cylinder %d", inliers_plane->indices.size(), inliers_cylinder->indices.size());
+
+            int best = this->maximum(inliers_plane->indices.size(), inliers_cylinder->indices.size());
+
+            //ROS_INFO("best %d", best);
+
+            switch (best)
+            {
+            //verticle plane
+            case 0:
+                inliers = inliers_plane;
+                coefficients = coefficients_plane;
+                break;
+            //cylinder
+            case 1:
+                inliers = inliers_cylinder;
+                coefficients = coefficients_cylinder;
+                break;
+            }
+
+            if (inliers->indices.size() == 0 and no_primitives == 0)
+            {
+                std::cout << "PS: no primitive found!!!" << std::endl;
+                return false;
+            }
+            else if (inliers->indices.size() < min_primitive_size_)
+            {
+                break;
+            }
+            // generate the primitive msg
+            extract_.setInputCloud(cloud_input);
+            extract_.setNegative(false);
+            extract_.setIndices(inliers);
+            extract_.filter(*cloud_primitive);
+
+            chull_.setInputCloud(cloud_primitive);
+            //chull_.setDimension(2);
+            chull_.reconstruct(*cloud_hull);
+            Eigen::Vector4f center;
+            pcl::compute3DCentroid(*cloud_hull, center);
+
+            Eigen::Vector4f min_vals, max_vals;
+            pcl::getMinMax3D(*cloud_primitive, min_vals, max_vals);
+
+            // Get cloud
+            pcl::toROSMsg(*cloud_primitive, primitive_msg.cloud);
+
+            pcl_conversions::fromPCL(cloud_primitive->header, primitive_msg.header);
+
+            // Get primitive center
+            primitive_msg.center.x = center[0];
+            primitive_msg.center.y = center[1];
+            primitive_msg.center.z = center[2];
+
+            // Get primitive min and max values
+            primitive_msg.min.x = min_vals[0];
+            primitive_msg.min.y = min_vals[1];
+            primitive_msg.min.z = min_vals[2];
+
+            primitive_msg.max.x = max_vals[0];
+            primitive_msg.max.y = max_vals[1];
+            primitive_msg.max.z = max_vals[2];
+            // Get primitive polygon
+            for (int i = 0; i < cloud_hull->points.size(); i++)
+            {
+                geometry_msgs::Point32 p;
+                p.x = cloud_hull->points[i].x;
+                p.y = cloud_hull->points[i].y;
+                p.z = cloud_hull->points[i].z;
+                primitive_msg.polygon.push_back(p);
+            }
+
+            for (int i = 0; i < coefficients->values.size(); i++)
+            {
+                primitive_msg.coef.push_back(coefficients->values[i]);
+            }
+            // Get primitive coefficients
+            if (best == 0)
+            {
+                // plane
+                primitive_msg.type = 1;
+                float height, length;
+                // Get plane normal
+                float mag = sqrt(coefficients->values[0] * coefficients->values[0] +
+                                 coefficients->values[1] * coefficients->values[1] +
+                                 coefficients->values[2] * coefficients->values[2]);
+                primitive_msg.normal[0] = coefficients->values[0] / mag;
+                primitive_msg.normal[1] = coefficients->values[1] / mag;
+                primitive_msg.normal[2] = coefficients->values[2] / mag;
+                primitive_msg.size.data = cloud_primitive->points.size();
+
+                if (primitive_msg.normal[2] < 0.5)
+                {
+                    primitive_msg.is_vertical = true;
+                    height = primitive_msg.max.z - primitive_msg.min.z;
+                    length = sqrt((primitive_msg.max.x - primitive_msg.min.x) * (primitive_msg.max.x - primitive_msg.min.x) +
+                                  (primitive_msg.max.y - primitive_msg.min.y) * (primitive_msg.max.y - primitive_msg.min.y));
+                }
+                else
+                {
+                    primitive_msg.is_vertical = false;
+                    height = primitive_msg.max.x - primitive_msg.min.x;
+                    length = primitive_msg.max.y - primitive_msg.min.y;
+                }
+                float plane_area = height * length;
+                ROS_INFO("Plane_area: %f, height: %f, length: %f", plane_area, height, length);
+                if (plane_area < max_plane_area_ && height / length < 25 && length / height < 25)
+                {
+                    primitives.push_back(primitive_msg);
+                    no_primitives++;
+                }
+            }
+
+            else if (best == 1)
+            {
+                // cylinder
+                primitive_msg.type = 3;
+
+                // Get cylinder normal
+                primitive_msg.normal[0] = coefficients->values[3];
+                primitive_msg.normal[1] = coefficients->values[4];
+                primitive_msg.normal[2] = coefficients->values[5];
+
+                primitive_msg.size.data = cloud_primitive->points.size();
+                primitive_msg.is_vertical = true;
+                primitives.push_back(primitive_msg);
+                no_primitives++;
+            }
+
+            extract_.setNegative(true);
+            extract_.filter(*cloud_input);
+            extract_normals_.setNegative(true);
+            extract_normals_.setInputCloud(cloud_normals);
+            extract_normals_.setIndices(inliers);
+            extract_normals_.filter(*cloud_normals);
+            ros::Duration(0.2).sleep();
+        }
+        std::cout << "PS: " << no_primitives << ". primitives segmented!" << std::endl;
+        return true;
+    }
+
+    void marker_publish(jackal_affordance::Primitive marker_to_be_pub, int id)
+    {
+        // get marker dimension
+        float height, length;
+        if (marker_to_be_pub.is_vertical)
+        {
+            height = marker_to_be_pub.max.z - marker_to_be_pub.min.z;
+            length = sqrt((marker_to_be_pub.max.x - marker_to_be_pub.min.x) * (marker_to_be_pub.max.x - marker_to_be_pub.min.x) +
+                          (marker_to_be_pub.max.y - marker_to_be_pub.min.y) * (marker_to_be_pub.max.y - marker_to_be_pub.min.y));
+        }
+        else
+        {
+            height = marker_to_be_pub.max.x - marker_to_be_pub.min.x;
+            length = marker_to_be_pub.max.y - marker_to_be_pub.min.y;
+        }
+        //get marker orientation
+        geometry_msgs::Quaternion orientation;
+        orientation = this->calculate_quaternion(marker_to_be_pub);
+        visualization_msgs::Marker marker;
+        marker.header.frame_id = fixed_frame_;
+        marker.header.stamp = ros::Time();
+        marker.ns = "my_namespace";
+        marker.id = id;
+        marker.type = marker_to_be_pub.type;
+        marker.action = visualization_msgs::Marker::ADD;
+        // create a tf transform to translate the face of cylinder to detected position
+        marker.pose.position.x = marker_to_be_pub.center.x;
+        marker.pose.position.y = marker_to_be_pub.center.y;
+        marker.pose.position.z = marker_to_be_pub.center.z;
+        marker.pose.orientation = orientation;
+        if (marker.type == 1)
+        {
+            marker.scale.x = 0.02;
+            marker.scale.y = length;
+            marker.scale.z = height;
+        }
+        else if (marker.type == 3)
+        {
+            marker.scale.x = marker_to_be_pub.coef[6] * 2;
+            marker.scale.y = marker_to_be_pub.coef[6] * 2;
+            marker.scale.z = height;
+        }
+        marker.color.a = 0.8; // Don't forget to set the alpha!
+        marker.color.r = 1.0;
+        marker.color.g = 0.65;
+        marker.color.b = 0.0;
+        marker.lifetime = ros::Duration();
+        marker_pub_.publish(marker);
+        //ROS_INFO("position; %f,%f,%f", marker.pose.position.x, marker.pose.position.y, marker.pose.position.z);
+    }
+
+    // calculate the quaternion rotation between two vector, up_vector and axis_vector
+    geometry_msgs::Quaternion calculate_quaternion(jackal_affordance::Primitive Primitive)
+    {
+        tf::Vector3 axis_vector(Primitive.normal[0], Primitive.normal[1], Primitive.normal[2]);
+        tf::Vector3 up_vector(1.0, 0.0, 0.0);
+        if (Primitive.type == 3)
+        {
+            up_vector.setX(0.0);
+            up_vector.setY(0.0);
+            up_vector.setZ(1.0);
+        }
+        tf::Vector3 right_vector = axis_vector.cross(up_vector);
+        right_vector.normalized();
+        tf::Quaternion q(right_vector, -1.0 * acos(axis_vector.dot(up_vector)));
+        q.normalize();
+        geometry_msgs::Quaternion cylinder_orientation;
+        tf::quaternionTFToMsg(q, cylinder_orientation);
+        return cylinder_orientation;
+    }
+
     bool primitive_extract()
     {
-        planes_.resize(0);
+        primitives_.resize(0);
         // TODO: filter point cloud
-
+        pcl::PassThrough<PointT> pass;
+        pass.setInputCloud(cloud_transformed_);
+        pass.setFilterFieldName("z");
+        pass.setFilterLimits(-100, 100);
+        pass.filter(*cloud_transformed_);
         //LCCP Segmentation: SuperVoxel + LCCP
         //STEP1: 超体聚类 set parameters
         //voxel_resolution is the resolution (in meters) of voxels used、
@@ -378,29 +465,32 @@ class AffordanceDetect
                     cloud_temp->push_back(temp);
                 }
             }
-            ROS_INFO("cloud_temp size: %d", cloud_temp->size());
+            //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_)
-                this->planar_segmentation(planes_, cloud_temp, 'v');
-            //Find Primitives in Segmentations
-            for (int i = 0; i < planes_.size(); i++)
             {
-                this->marker_publish(planes_[i], i);
+                this->primitive_segmentation(primitives_, cloud_temp);
+            }
+
+            for (int i = 0; i < primitives_.size(); i++)
+            {
+                this->marker_publish(primitives_[i], i);
+                // primitives_[i].cloud.header.frame_id = fixed_frame_;
+                // primitive_cloud_pub_.publish(primitives_[i].cloud);
             }
         }
 
-        if (planes_.size() != 0)
+        pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
+        lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+        //lccp_cloud_pub_.publish(lccp_labeled_cloud_);
+        if (primitives_.size() != 0)
         {
             std::cout << "LCCP: # of input point cloud: " << lccp_labeled_cloud->size() << ", # of segmentations: " << label_max << std::endl;
-            pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
-            lccp_labeled_cloud_.header.frame_id = fixed_frame_;
-            debug_cloud_pub_.publish(lccp_labeled_cloud_);
 
-            std::cout << "AD: # of planes found: " << planes_.size() << std::endl;
+            std::cout << "AD: # of primitve found: " << primitives_.size() << std::endl;
             return true;
         }
         else
             return false;
-        std::cout << "No plane found: " << planes_.size() << std::endl;
     }
 
     bool affordance_detect_callback(jackal_affordance::AffordanceDetect::Request &req,
@@ -416,7 +506,7 @@ class AffordanceDetect
             std::cout << "AD: couldn't extract primitive!" << std::endl;
             return false;
         }
-        res.planes = planes_;
+        res.primitives = primitives_;
         res.success = true;
         return true;
     }
@@ -424,20 +514,23 @@ class AffordanceDetect
   private:
     ros::NodeHandle nh_;
     ros::Subscriber info_sub_, rgb_sub_, point_cloud_sub_;
-    ros::Publisher marker_pub_, debug_cloud_pub_;
+    ros::Publisher marker_pub_, lccp_cloud_pub_, primitive_cloud_pub_;
     ros::ServiceServer affordance_detection_srv_;
     pcl::PointCloud<PointT>::Ptr cloud_transformed_, cloud_hull_;
     sensor_msgs::PointCloud2 cloud_raw_, lccp_labeled_cloud_;
     image_geometry::PinholeCameraModel model1_;
 
-    pcl::SACSegmentation<PointT> seg_;
+    pcl::SACSegmentationFromNormals<PointT, pcl::Normal> seg_;
     pcl::ExtractIndices<PointT> extract_;
+    pcl::ExtractIndices<pcl::Normal> extract_normals_;
     pcl::ConvexHull<PointT> chull_;
+    pcl::search::KdTree<PointT>::Ptr tree_;
+    pcl::NormalEstimation<PointT, pcl::Normal> ne_;
 
-    int min_plane_size_, min_seg_size_, max_plane_area_;
+    int min_primitive_size_, min_seg_size_, max_plane_area_;
     float seed_res_, voxel_res_;
     std::string info_topic_, rgb_topic_, point_cloud_topic_, fixed_frame_;
-    std::vector<jackal_affordance::Plane> planes_;
+    std::vector<jackal_affordance::Primitive> primitives_;
 };
 
 main(int argc, char **argv)

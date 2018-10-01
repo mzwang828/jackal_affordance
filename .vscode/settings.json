@@ -36,6 +36,7 @@
         "system_error": "cpp",
         "thread": "cpp",
         "cinttypes": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "algorithm": "cpp"
     }
 }

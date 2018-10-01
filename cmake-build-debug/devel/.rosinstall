@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/mzwang/affordance_ws/src/jackal_affordance/cmake-build-debug/devel/setup.sh

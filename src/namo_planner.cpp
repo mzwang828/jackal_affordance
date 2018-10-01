@@ -14,7 +14,7 @@
 
 #include "jackal_affordance/ValidateAction.h"
 #include "jackal_affordance/AffordanceDetect.h"
-#include "jackal_affordance/Plane.h"
+#include "jackal_affordance/Primitive.h"
 
 typedef actionlib::SimpleActionClient<jackal_affordance::ValidateAction> AffordanceValidate;
 typedef actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction> MoveBaseClient;
@@ -119,9 +119,9 @@ class NamoPlanner
                 {
                     if (detect_srv.response.success)
                     {
-                        ROS_INFO("Affordance Detect Successfully, find %lu affordance candidate(s)", detect_srv.response.planes.size());
+                        ROS_INFO("Affordance Detect Successfully, find %lu affordance candidate(s)", detect_srv.response.primitives.size());
                         // TODO: pick right obstacle to validate
-                        jackal_affordance::Plane affordance_to_validate = detect_srv.response.planes[0];
+                        jackal_affordance::Primitive affordance_to_validate = detect_srv.response.primitives[0];
                         affordance_validate_client_.waitForServer();
                         jackal_affordance::ValidateGoal validate_goal;
                         validate_goal.center = affordance_to_validate.center;

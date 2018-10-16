@@ -26,6 +26,7 @@ find_package(catkin REQUIRED COMPONENTS
   move_base_msgs 
   actionlib_msgs
   nav_msgs
+  frasier_utilities
 )
 
 
@@ -125,7 +126,7 @@ catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES jackal_affordance
   CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs std_msgs actionlib_msgs
-  tf tf_conversions message_runtime  trajectory_msgs actionlib move_base_msgs 
+  tf tf_conversions message_runtime  trajectory_msgs actionlib move_base_msgs frasier_utilities
 #  DEPENDS system_lib 
 )
 
@@ -158,6 +159,7 @@ message("PCL : ${PCL_INCLUDE_DIRS}")
  add_executable(affordance_detect src/affordance_detect.cpp)
  add_executable(affordance_validate src/affordance_validate.cpp)
  add_executable(namo_planner src/namo_planner.cpp)
+ add_executable(pick_up_test src/pick_up_test.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -170,6 +172,7 @@ message("PCL : ${PCL_INCLUDE_DIRS}")
  add_dependencies(affordance_detect ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
  add_dependencies(affordance_validate ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
  add_dependencies(namo_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+ add_dependencies(pick_up_test ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
  target_link_libraries(affordance_detect   
@@ -182,6 +185,10 @@ target_link_libraries(affordance_validate
  )
 
 target_link_libraries(namo_planner   
+   ${catkin_LIBRARIES}
+ )
+
+target_link_libraries(pick_up_test   
    ${catkin_LIBRARIES}
  )
 #############

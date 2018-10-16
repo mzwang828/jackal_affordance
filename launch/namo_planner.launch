@@ -1,12 +1,14 @@
  <launch>
+   <!--launch example: roslaunch jackal_affordance namo_planner.launch goal:="13 7" -->	
    <arg name="goal"/>
    <node pkg="robot_pose_publisher" type="robot_pose_publisher" name="robot_pose_publisher"/>
    <node pkg="jackal_affordance" type="namo_planner" name="hsr_namo_planner" args="$(arg goal)" output="screen">
      <rosparam>
-       trajectory_topic: /base_local_path_ref
-       dynamic_map_topic: /dynamic_obstacle_map_ref
-       movebase_cancel_topic: /move_base/move/cancel
+       trajectory_topic: /move_base/TrajectoryPlannerROS/global_plan
+       dynamic_map_topic: /move_base/local_costmap/costmap
+       movebase_cancel_topic: /move_base/cancel
        fixed_frame: map
+       move_base_topic: /move_base
      </rosparam>
    </node>
  </launch>

@@ -17,6 +17,7 @@
 #include <pcl/surface/convex_hull.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <image_geometry/pinhole_camera_model.h>
 #include <visualization_msgs/Marker.h>
@@ -37,7 +38,7 @@ typedef pcl::LCCPSegmentation<PointT>::SupervoxelAdjacencyList SuperVoxelAdjacen
 class AffordanceDetect
 {
   public:
-    AffordanceDetect(ros::NodeHandle n) : nh_(n), cloud_transformed_(new pcl::PointCloud<PointT>), cloud_hull_(new pcl::PointCloud<PointT>), tree_(new pcl::search::KdTree<PointT>())
+    AffordanceDetect(ros::NodeHandle n) : nh_(n), cloud_transformed_(new pcl::PointCloud<PointT>), cloud_filtered_(new pcl::PointCloud<PointT>), cloud_hull_(new pcl::PointCloud<PointT>), tree_(new pcl::search::KdTree<PointT>())
     {
         nh_.getParam("info_topic", info_topic_);
         nh_.getParam("rgb_topic", rgb_topic_);
@@ -76,22 +77,50 @@ class AffordanceDetect
     // transform the point cloud to target frame, which is /map in most cases
     {
         cloud_transformed_->clear();
-
+        std::string filter_frame = "base_link";
         pcl::PointCloud<PointT>::Ptr cloud_raw_pcl(new pcl::PointCloud<PointT>);
         pcl::fromROSMsg(cloud_raw_, *cloud_raw_pcl);
         std::string source_frame = cloud_raw_.header.frame_id;
         tf::TransformListener listener;
-        listener.waitForTransform(fixed_frame_, source_frame, ros::Time(0), ros::Duration(10.0));
+
+        // transform to odom frame to filter first
+        listener.waitForTransform(filter_frame, source_frame, ros::Time(0), ros::Duration(10.0));
         tf::StampedTransform transform;
         tf::Transform tf_transform;
         Eigen::Affine3d eigen_transform;
         try
         {
-            listener.lookupTransform(fixed_frame_, source_frame, ros::Time(0), transform);
+            listener.lookupTransform(filter_frame, source_frame, ros::Time(0), transform);
             tf_transform.setOrigin(transform.getOrigin());
             tf_transform.setRotation(transform.getRotation());
             tf::transformTFToEigen(transform, eigen_transform);
-            pcl::transformPointCloud(*cloud_raw_pcl, *cloud_transformed_, eigen_transform);
+            pcl::transformPointCloud(*cloud_raw_pcl, *cloud_filtered_, eigen_transform);
+        }
+        catch (tf::TransformException ex)
+        {
+            ROS_ERROR("%s", ex.what());
+            return false;
+        }
+
+        // filter
+        pcl::PassThrough<PointT> pass;
+        pass.setInputCloud(cloud_filtered_);
+        pass.setFilterFieldName("x");
+        pass.setFilterLimits(0, 10);
+        pass.filter(*cloud_filtered_);
+        pass.setFilterFieldName("z");
+        pass.setFilterLimits(0.02, 100);
+        pass.filter(*cloud_filtered_);
+
+        //transform to fxied frame for future computation
+        listener.waitForTransform(fixed_frame_, filter_frame, ros::Time(0), ros::Duration(10.0));
+        try
+        {
+            listener.lookupTransform(fixed_frame_, filter_frame, ros::Time(0), transform);
+            tf_transform.setOrigin(transform.getOrigin());
+            tf_transform.setRotation(transform.getRotation());
+            tf::transformTFToEigen(transform, eigen_transform);
+            pcl::transformPointCloud(*cloud_filtered_, *cloud_transformed_, eigen_transform);
             std::cout << "Point cloud transformed";
             return true;
         }
@@ -111,6 +140,7 @@ class AffordanceDetect
     bool primitive_segmentation(std::vector<jackal_affordance::Primitive> &primitives, pcl::PointCloud<PointT>::Ptr cloud_input)
     {
         // find all primitives from given point cloud input
+        int initial_size = cloud_input->size();
         pcl::PointCloud<PointT>::Ptr cloud_primitive(new pcl::PointCloud<PointT>);
         pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
         pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
@@ -126,7 +156,7 @@ class AffordanceDetect
         seg_.setOptimizeCoefficients(true);
         seg_.setMaxIterations(500); // iteration limits decides segmentation goodness
         seg_.setMethodType(pcl::SAC_RANSAC);
-        seg_.setDistanceThreshold(0.01);
+        seg_.setDistanceThreshold(0.03);
         seg_.setNormalDistanceWeight(0.1);
         int no_primitives = 0;
         while (true)
@@ -146,14 +176,14 @@ class AffordanceDetect
             seg_.setModelType(pcl::SACMODEL_CYLINDER);
             seg_.setNormalDistanceWeight(0.1);
             seg_.setMaxIterations(1000);
-            seg_.setDistanceThreshold(0.07);
+            seg_.setDistanceThreshold(0.05);
             seg_.setRadiusLimits(0, 0.15);
             seg_.segment(*inliers_cylinder, *coefficients_cylinder);
 
             //ROS_INFO("vertical plane %d, horizontal %d, cylinder %d", inliers_vplane->indices.size(), inliers_hplane->indices.size(), inliers_cylinder->indices.size());
             ROS_INFO("plane %d, cylinder %d", inliers_plane->indices.size(), inliers_cylinder->indices.size());
 
-            int best = this->maximum(inliers_plane->indices.size(), inliers_cylinder->indices.size());
+            int best = this->maximum(1.5 * inliers_plane->indices.size(), inliers_cylinder->indices.size());
 
             //ROS_INFO("best %d", best);
 
@@ -176,8 +206,9 @@ class AffordanceDetect
                 std::cout << "PS: no primitive found!!!" << std::endl;
                 return false;
             }
-            else if (inliers->indices.size() < min_primitive_size_)
+            else if ((inliers->indices.size() < min_primitive_size_) || (float(inliers->indices.size())/float((initial_size)) < 0.2))
             {
+                ROS_INFO("inlinder: %d, initial: %d", inliers->indices.size() ,initial_size);
                 break;
             }
             // generate the primitive msg
@@ -275,6 +306,7 @@ class AffordanceDetect
                 primitive_msg.normal[2] = coefficients->values[5];
 
                 primitive_msg.size.data = cloud_primitive->points.size();
+                // TODO: check horizontal cylinder in addition to vertical cylinder
                 primitive_msg.is_vertical = true;
                 primitives.push_back(primitive_msg);
                 no_primitives++;
@@ -287,7 +319,7 @@ class AffordanceDetect
             extract_normals_.setIndices(inliers);
             extract_normals_.filter(*cloud_normals);
             ros::Duration(0.2).sleep();
-        }
+        }   
         std::cout << "PS: " << no_primitives << ". primitives segmented!" << std::endl;
         return true;
     }
@@ -366,12 +398,11 @@ class AffordanceDetect
     bool primitive_extract()
     {
         primitives_.resize(0);
-        // TODO: filter point cloud
-        pcl::PassThrough<PointT> pass;
-        pass.setInputCloud(cloud_transformed_);
-        pass.setFilterFieldName("z");
-        pass.setFilterLimits(-100, 100);
-        pass.filter(*cloud_transformed_);
+        // down sampling the point cloud
+        pcl::VoxelGrid<PointT> sor;
+        sor.setInputCloud(cloud_transformed_);
+        sor.setLeafSize(0.01f, 0.01f, 0.01f);
+        sor.filter(*cloud_transformed_);
         //LCCP Segmentation: SuperVoxel + LCCP
         //STEP1: 超体聚类 set parameters
         //voxel_resolution is the resolution (in meters) of voxels used、
@@ -465,6 +496,13 @@ class AffordanceDetect
                     cloud_temp->push_back(temp);
                 }
             }
+
+            ROS_INFO("temp cloud size: %d", cloud_temp->size());
+
+            pcl::toROSMsg(*cloud_temp, lccp_labeled_cloud_);
+            lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+            lccp_cloud_pub_.publish(lccp_labeled_cloud_);
+
             //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_)
             {
@@ -479,8 +517,8 @@ class AffordanceDetect
             }
         }
 
-        pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
-        lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+        //pcl::toROSMsg(*ColoredCloud2, lccp_labeled_cloud_);
+        //lccp_labeled_cloud_.header.frame_id = fixed_frame_;
         //lccp_cloud_pub_.publish(lccp_labeled_cloud_);
         if (primitives_.size() != 0)
         {
@@ -516,7 +554,7 @@ class AffordanceDetect
     ros::Subscriber info_sub_, rgb_sub_, point_cloud_sub_;
     ros::Publisher marker_pub_, lccp_cloud_pub_, primitive_cloud_pub_;
     ros::ServiceServer affordance_detection_srv_;
-    pcl::PointCloud<PointT>::Ptr cloud_transformed_, cloud_hull_;
+    pcl::PointCloud<PointT>::Ptr cloud_transformed_, cloud_filtered_, cloud_hull_;
     sensor_msgs::PointCloud2 cloud_raw_, lccp_labeled_cloud_;
     image_geometry::PinholeCameraModel model1_;
 

@@ -1,9 +1,11 @@
 #goal definition
 geometry_msgs/Point center
 float64[3] normal
+int32 primitive_type
+int32 validate_type
 ---
 #result definition
-bool movable
+bool result
 ---
 #feedback
 geometry_msgs/Point center

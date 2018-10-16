@@ -63,9 +63,10 @@
   <build_depend>move_base_msgs</build_depend>
   <build_depend>actionlib_msgs</build_depend>
   <build_depend>nav_msgs</build_depend>
- 
+  <build_depend>frasier_utilities</build_depend>
   <build_depend>image_geometry</build_depend>
   <build_depend>visualization_msgs</build_depend>
+
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>message_runtime</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
@@ -80,6 +81,7 @@
   <exec_depend>move_base_msgs</exec_depend>
   <exec_depend>actionlib_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>frasier_utilities</exec_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

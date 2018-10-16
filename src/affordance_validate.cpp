@@ -10,9 +10,9 @@
 #include <control_msgs/FollowJointTrajectoryAction.h>
 #include <control_msgs/FollowJointTrajectoryGoal.h>
 #include <move_base_msgs/MoveBaseAction.h>
+#include <frasier_utilities/gripper.h>
 
 #include "tf/transform_datatypes.h"
-
 #include "jackal_affordance/ValidateAction.h"
 
 typedef actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction> MoveBaseClient;
@@ -21,8 +21,8 @@ typedef actionlib::SimpleActionClient<control_msgs::FollowJointTrajectoryAction>
 class AffordanceValidate
 {
   public:
-    AffordanceValidate(ros::NodeHandle n, std::string name) : nh_(n), validate_server_(n, name, boost::bind(&AffordanceValidate::executeCB, this, _1), false),
-                                            action_name_(name)
+    AffordanceValidate(ros::NodeHandle n, std::string name) : nh_(n), gc_(n, true), validate_server_(n, name, boost::bind(&AffordanceValidate::executeCB, this, _1), false),
+                                                              action_name_(name)
     {
         nh_.getParam("info_topic", info_topic_);
         nh_.getParam("point_cloud_topic", point_cloud_topic_);
@@ -31,12 +31,11 @@ class AffordanceValidate
         nh_.getParam("fixed_frame", fixed_frame_);
         nh_.getParam("force_max", force_max_);
         nh_.getParam("force_min", force_min_);
-        nh_.getParam("velocity_topic", velocity_topic_); 
-        nh_.getParam("arm_trajectory_topic", arm_trajectory_topic_); 
+        nh_.getParam("velocity_topic", velocity_topic_);
+        nh_.getParam("arm_trajectory_topic", arm_trajectory_topic_);
 
         //point_cloud_sub_ = nh_.subscribe(point_cloud_topic_, 10, &AffordanceValidate::point_cloud_callback, this);
         //depth_sub_ = nh_.subscribe(depth_topic_, 10, &AffordanceValidate::depth_callback, this);
-        // affordance_validate_srv_ = nh_.advertiseService("affordance_validate", &AffordanceValidate::affordance_validate_callback, this);
         hand_force_sub_ = nh_.subscribe(force_sensor_topic_, 10, &AffordanceValidate::force_callback, this);
         velocity_pub_ = nh_.advertise<geometry_msgs::Twist>(velocity_topic_, 10);
         validate_server_.start();
@@ -49,8 +48,8 @@ class AffordanceValidate
         force_[2] = msg.wrench.force.z; // force along the arm direction
 
         // ROS_INFO("Force : %f", force_[2]);
-
-        if ((validating_ == 1) && (force_[2] > force_max_))
+        // if found object is not movable, stop the move immediately
+        if ((validating_ == true) && (force_[2] > force_max_))
         {
             geometry_msgs::Twist tw;
             tw.linear.x = 0.0;
@@ -60,7 +59,7 @@ class AffordanceValidate
             tw.angular.y = 0.0;
             tw.angular.z = 0.0;
             velocity_pub_.publish(tw);
-            movable_ = 0;
+            result_ = false;
         }
     }
 
@@ -100,76 +99,12 @@ class AffordanceValidate
             return false;
     }
 
-    ///////////////////////////////////////////////////////////////////////////////////////
-    // service
-    ///////////////////////////////////////////////////////////////////////////////////////
-    // bool affordance_validate_callback(jackal_affordance::AffordanceValidate::Request &req,
-    //                                   jackal_affordance::AffordanceValidate::Response &res)
-    // {
-    //     // first go to the position of obstacle
-    //     validating_ = 1;
-    //     MoveBaseClient ac("/move_base/move", true);
-
-    //     move_base_msgs::MoveBaseGoal move_goal;
-    //     move_goal.target_pose.header.frame_id = fixed_frame_;
-    //     move_goal.target_pose.header.stamp = ros::Time::now();
-
-    //     move_goal.target_pose.pose.position.x = req.center.x - req.normal[0];
-    //     move_goal.target_pose.pose.position.y = req.center.y - req.normal[1];
-    //     double normal[3] = {req.normal[0], req.normal[1], req.normal[2]};
-    //     move_goal.target_pose.pose.orientation = this->calculate_quaternion(normal);
-
-    //     while (!ac.waitForServer(ros::Duration(5.0)))
-    //     {
-    //         ROS_INFO("Waiting for the move_base action server to come up");
-    //     }
-
-    //     ROS_INFO("Sending goal");
-    //     ac.sendGoal(move_goal);
-    //     ac.waitForResult();
-
-    //     if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
-    //     {
-    //         // straight arm
-    //         ROS_INFO("Straighting the arm");
-    //         float joint_state[] = {0.044, -0.23, -0.00127, -1.241, 0.000};
-    //         if (!this->move_arm(joint_state))
-    //         {
-    //             ROS_INFO("Failed to move arm straight");
-    //         }
-    //         ros::Duration(0.5).sleep();
-    //         float force_at_start = force_[2];
-    //         ROS_INFO("Initial Force: %f", force_at_start);
-    //         // contact with obstacle to validate affordance
-    //         geometry_msgs::Twist tw;
-    //         tw.linear.x = 0.3;
-    //         while ((force_[2] - force_at_start) < force_min_)
-    //         {
-    //             velocity_pub_.publish(tw);
-    //             ros::spinOnce();
-    //             ROS_INFO("Force difference: %f", force_[2]-force_at_start);
-    //         }
-    //         ROS_INFO("waaaaaaaaaaa");
-    //         tw.linear.x = 0.0;
-    //         velocity_pub_.publish(tw);
-    //         ros::Duration(1).sleep();
-
-    //         tw.linear.x = 0.3;
-    //         velocity_pub_.publish(tw);
-    //     }
-
-    //     res.movable = movable_;
-    //     res.success = 1;
-    //     ros::Duration(1).sleep();
-    //     float joint_state[] = {0, -0.024, 0.0016, -0.2288, -0.0015};
-    //     if (!this->move_arm(joint_state))
-    //     {
-    //         ROS_INFO("Failed to move arm back");
-    //     }
-    //     validating_ = 0;
-    //     return true;
-    // }
-
+    float force_difference(float force1[3], float force2[3])
+    {
+        return sqrt((force1[0] - force2[0]) * (force1[0] - force2[0]) +
+                    (force1[1] - force2[1]) * (force1[1] - force2[1]) +
+                    (force1[2] - force2[2]) * (force1[2] - force2[2]));
+    }
 
     //////////////////////////////////////////////////////////////////////////////
     // actionlib
@@ -187,14 +122,19 @@ class AffordanceValidate
         }
 
         bool success = true;
-        validating_ = 1;
+
         // first go to the position of obstacle
-        MoveBaseClient ac("/move_base/move", true);
+
+        // with tmc functions/controllers
+        //MoveBaseClient ac("/move_base/move", true);
+        // with pure ros move base
+        MoveBaseClient ac("/move_base", true);
 
         move_base_msgs::MoveBaseGoal move_goal;
         move_goal.target_pose.header.frame_id = fixed_frame_;
         move_goal.target_pose.header.stamp = ros::Time::now();
-
+        // normal vector here: for plane, normal vector is normal to the plane; for cylinder, normal vector is the
+        // vector poinitng from robot to the center of cylinder.
         move_goal.target_pose.pose.position.x = goal->center.x - goal->normal[0];
         move_goal.target_pose.pose.position.y = goal->center.y - goal->normal[1];
         double normal[3] = {goal->normal[0], goal->normal[1], goal->normal[2]};
@@ -211,46 +151,128 @@ class AffordanceValidate
 
         if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
         {
-            // straight arm
-            ROS_INFO("Straighting the arm");
-            float joint_state[] = {0.044, -0.23, -0.00127, -1.241, 0.000};
-            if (!this->move_arm(joint_state))
+            switch (goal->validate_type)
             {
-                ROS_INFO("Failed to move arm straight");
-            }
-            ros::Duration(0.5).sleep();
-            float force_at_start = force_[2];
-            ROS_INFO("Initial Force: %f", force_at_start);
-            // contact with obstacle to validate affordance
-            geometry_msgs::Twist tw;
-            tw.linear.x = 0.3;
-            while ((force_[2] - force_at_start) < force_min_)
+            case 1:
             {
+                //validate pushability
+                // TODO: adjust arm position
+                validating_ = 1;
+                ROS_INFO("Straighting the arm");
+                float joint_state_a[] = {0.040, -0.23, -0.00127, -1.241, 0.000};
+                if (!this->move_arm(joint_state_a))
+                {
+                    ROS_INFO("Failed to move arm to right position");
+                }
+                ros::Duration(0.5).sleep();
+                float force_at_start = force_[2];
+                ROS_INFO("Initial Force: %f", force_at_start);
+                // contact with obstacle to validate affordance
+                geometry_msgs::Twist tw;
+                tw.linear.x = 0.1;
                 velocity_pub_.publish(tw);
-                ROS_INFO("Force difference: %f", force_[2] - force_at_start);
+                while ((force_[2] - force_at_start) < force_min_)
+                {
+                    ROS_INFO("Force difference: %f", force_[2] - force_at_start);
+                }
+                tw.linear.x = 0.0;
+                velocity_pub_.publish(tw);
+                ros::Duration(1).sleep();
+
+                tw.linear.x = 0.1;
+                velocity_pub_.publish(tw);
+                ros::Duration(1).sleep();
+
+                tw.linear.x = 0.0;
+                velocity_pub_.publish(tw);
+                ros::Duration(1).sleep();
+
+                break;
             }
-            tw.linear.x = 0.0;
-            velocity_pub_.publish(tw);
-            ros::Duration(1).sleep();
-
-            tw.linear.x = 0.3;
-            velocity_pub_.publish(tw);
+            case 2:
+            {
+                //validate liftability
+                // TODO: adjust arm position
+                ROS_INFO("Straighting the arm");
+                float joint_state_b[] = {0.06, -2.62, 0.02, 1.06, -0.02};
+                if (!this->move_arm(joint_state_b))
+                {
+                    ROS_INFO("Failed to move arm to right position");
+                }
+                ros::Duration(0.5).sleep();
+                gc_.release();
+                float force_at_start[3] = {force_[0], force_[1], force_[2]};
+                // go forward till contact with object
+                geometry_msgs::Twist tw;
+                tw.linear.x = 0.1;
+                while ((force_[2] - force_at_start[2]) < force_min_)
+                {
+                    velocity_pub_.publish(tw);
+                    ROS_INFO("Force difference: %f", force_[2] - force_at_start[2]);
+                }
+                tw.linear.x = 0.0;
+                velocity_pub_.publish(tw);
+                ros::Duration(1).sleep();
+                // pick up object
+                gc_.grab();
+                // lift arm slightly to check liftibility
+                float joint_state_c[] = {0.12, -2.62, 0.02, 1.06, -0.02};
+                if (!this->move_arm(joint_state_c))
+                {
+                    ROS_INFO("Failed to move arm up");
+                    result_ = false;
+                }
+                ros::Duration(1).sleep();
+                // TODO: check force/torque to determine liftability
+                float weight = force_[0] - force_at_start[0];
+                if (weight < 2 || weight > 10)
+                {
+                    result_ = false;
+                    ROS_INFO("Not Liftable");
+                }
+                else
+                    ROS_INFO("Liftable Object");
+                // put arm down
+                this->move_arm(joint_state_b);
+                /*
+                gc_.release();
+                ros::Duration(1).sleep();
+                */
+            }
+            }
         }
-
+        else
+        {
+            ROS_INFO("Failed to move to obstacle position");
+            return;
+        }
+        /*
+        // move arm back to original position
         ros::Duration(1).sleep();
-        float joint_state[] = {0, -0.024, 0.0016, -0.2288, -0.0015};
-        if (!this->move_arm(joint_state))
+        geometry_msgs::Twist tw;
+        tw.linear.x = -1;
+        velocity_pub_.publish(tw);
+        ros::Duration(1).sleep();
+        tw.linear.x = 0;
+        velocity_pub_.publish(tw);
+        ros::Duration(1).sleep();
+        float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
+        gc_.grab();
+        ros::Duration(1).sleep();
+        if (!this->move_arm(joint_state_back))
         {
             ROS_INFO("Failed to move arm back");
             return;
         }
-
-        result_.movable = movable_;
+        */
+        action_result_.result = result_;
         ROS_INFO("%s: Action Executed Succeeded", action_name_.c_str());
         // set the action state to succeeded
-        validate_server_.setSucceeded(result_);
+        validate_server_.setSucceeded(action_result_);
 
-        validating_ = 0;
+        validating_ = false;
+
+        return;
     }
 
     // calculate the quaternion rotation between two vector, up_vector and axis_vector
@@ -270,17 +292,18 @@ class AffordanceValidate
   private:
     ros::NodeHandle nh_;
     actionlib::SimpleActionServer<jackal_affordance::ValidateAction> validate_server_;
-    // ros::ServiceServer affordance_validate_srv_;
     ros::Subscriber hand_force_sub_, depth_sub_, point_cloud_sub_;
     ros::Publisher velocity_pub_;
 
     float force_[3] = {}; //hand force x, y, z
 
     std::string info_topic_, point_cloud_topic_, depth_topic_, force_sensor_topic_, fixed_frame_, action_name_, arm_trajectory_topic_, velocity_topic_;
-    int validating_ = 0, movable_ = 1;
+    bool validating_ = false, result_ = true;
     int force_max_, force_min_;
     jackal_affordance::ValidateFeedback feedback_;
-    jackal_affordance::ValidateResult result_;
+    jackal_affordance::ValidateResult action_result_;
+
+    GripperMSG gc_;
 };
 
 main(int argc, char **argv)

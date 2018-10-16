@@ -1,0 +1,4 @@
+<launch>
+<include file="$(find jackal_affordance)/launch/hsr_affordance_detect.launch">
+<include file="$(find jackal_affordance)/launch/hsr_affordance_validate.launch">
+</launch>

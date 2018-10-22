@@ -5,7 +5,8 @@
    <node pkg="jackal_affordance" type="namo_planner" name="hsr_namo_planner" args="$(arg goal)" output="screen">
      <rosparam>
        trajectory_topic: /move_base/TrajectoryPlannerROS/global_plan
-       dynamic_map_topic: /move_base/local_costmap/costmap
+       local_map_topic: /move_base/local_costmap/costmap
+       global_map_topic: /move_base/global_costmap/costmap
        movebase_cancel_topic: /move_base/cancel
        fixed_frame: map
        move_base_topic: /move_base

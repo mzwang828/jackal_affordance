@@ -13,6 +13,17 @@
 #include <move_base_msgs/MoveBaseAction.h>
 #include <geometry_msgs/Pose.h>
 
+#include <pcl/point_types.h>
+#include <pcl/common/common_headers.h>
+#include <pcl/common/common.h>
+#include <pcl/common/transforms.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <tf/transform_listener.h>
+#include <tf_conversions/tf_eigen.h>
+#include "tf/transform_datatypes.h"
+#include "Eigen/Core"
+#include "Eigen/Geometry"
+
 // arm relative
 #include <control_msgs/FollowJointTrajectoryAction.h>
 #include <control_msgs/FollowJointTrajectoryGoal.h>
@@ -33,24 +44,32 @@ class NamoPlanner
     NamoPlanner(ros::NodeHandle n) : nh_(n), affordance_validate_client_("/hsr_affordance_validate/affordance_validate/", true), gc_(n, true)
     {
         nh_.getParam("trajectory_topic", trajectory_topic_);
-        nh_.getParam("dynamic_map_topic", dynamic_map_topic_);
+        nh_.getParam("local_map_topic", local_map_topic_);
+        nh_.getParam("global_map_topic", global_map_topic_);
         nh_.getParam("movebase_cancel_topic", movebase_cancel_topic_);
         nh_.getParam("fixed_frame", fixed_frame_);
         nh_.getParam("move_base_topic", move_base_topic_);
         nh_.getParam("/move_base/local_costmap/inflation_radius", inflation_radius_);
 
-        dynamic_map_sub_ = nh_.subscribe(dynamic_map_topic_, 1, &NamoPlanner::map_callback, this);
+        local_map_sub_ = nh_.subscribe(local_map_topic_, 1, &NamoPlanner::local_map_callback, this);
+        global_map_sub_ = nh_.subscribe(global_map_topic_, 1, &NamoPlanner::global_map_callback, this);
         robot_pose_sub_ = nh_.subscribe("/robot_pose", 1, &NamoPlanner::pose_callback, this);
         cancel_movebase_pub_ = nh_.advertise<actionlib_msgs::GoalID>(movebase_cancel_topic_, 1);
         affordance_detect_client_ = nh_.serviceClient<jackal_affordance::AffordanceDetect>("/hsr_affordance_detect/affordance_detect");
         initial_trajectory_pub_ = nh_.advertise<nav_msgs::Path>("initial_trajectory", 1);
         path_sub_ = nh_.subscribe(trajectory_topic_, 1, &NamoPlanner::path_callback, this);
         velocity_pub_ = nh_.advertise<geometry_msgs::Twist>("/hsrb/opt_command_velocity", 10);
+        non_movable_point_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("verified_obstacle_clouds", 10);
     }
 
-    void map_callback(const nav_msgs::OccupancyGrid &msg)
+    void local_map_callback(const nav_msgs::OccupancyGrid &msg)
     {
-        dynamic_map_ = msg;
+        local_map_ = msg;
+    }
+
+    void global_map_callback(const nav_msgs::OccupancyGrid &msg)
+    {
+        global_map_ = msg;
     }
 
     void pose_callback(const geometry_msgs::Pose &msg)
@@ -102,6 +121,33 @@ class NamoPlanner
             return false;
     }
 
+    sensor_msgs::PointCloud2 cloud_transform(sensor_msgs::PointCloud2 cloud_raw, std::string source_frame, std::string target_frame)
+    {
+        sensor_msgs::PointCloud2 cloud_pub;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_transformed(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_raw_pcl(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(cloud_raw, *cloud_raw_pcl);
+        tf::TransformListener listener;
+        listener.waitForTransform(target_frame, source_frame, ros::Time(0), ros::Duration(10.0));
+        tf::StampedTransform transform;
+        tf::Transform tf_transform;
+        Eigen::Affine3d eigen_transform;
+        try
+        {
+            listener.lookupTransform(target_frame, source_frame, ros::Time(0), transform);
+            tf_transform.setOrigin(transform.getOrigin());
+            tf_transform.setRotation(transform.getRotation());
+            tf::transformTFToEigen(transform, eigen_transform);
+            pcl::transformPointCloud(*cloud_raw_pcl, *cloud_transformed, eigen_transform);
+        }
+        catch (tf::TransformException ex)
+        {
+            ROS_ERROR("%s", ex.what());
+        }
+        pcl::toROSMsg(*cloud_transformed, cloud_pub);
+        return cloud_pub;
+    }
+
     // given position on /map frame, return of occupancy of that position on dynmaic_map
     int get_occupancy(double position[2], nav_msgs::OccupancyGrid map)
     {
@@ -120,10 +166,15 @@ class NamoPlanner
     // iterate all detected afffordances to find the one block the way
     int which_primitive(double position[2], std::vector<jackal_affordance::Primitive> primitives)
     {
+        //TODO: finding the real obstacle when there are offsets
         for (int i = 0; i < primitives.size(); i++)
         {
             jackal_affordance::Primitive current_primitive = primitives[i];
             if (!current_primitive.is_vertical)
+                continue;
+            // check if primitive is static obstacle on global map
+            double primitive_position[2] = {current_primitive.center.x, current_primitive.center.y};
+            if (get_occupancy(primitive_position, global_map_) > 50)
                 continue;
             // vector from center of primitive to occupied trajectory position
             std::vector<double> traj_vector = {position[0] - current_primitive.center.x, position[1] - current_primitive.center.y};
@@ -200,8 +251,8 @@ class NamoPlanner
                     // get each coordinate of the trajectory and check its occupancy
                     traj_coordinate_[0] = initial_trajectory_.poses[i].pose.position.x;
                     traj_coordinate_[1] = initial_trajectory_.poses[i].pose.position.y;
-                    int occupancy = this->get_occupancy(traj_coordinate_, dynamic_map_);
-                    if (occupancy > 70)
+                    int occupancy = this->get_occupancy(traj_coordinate_, local_map_);
+                    if (occupancy > 85)
                     {
                         cancel_movebase_pub_.publish(empty_goal);
                         namo_state = 2;
@@ -267,6 +318,16 @@ class NamoPlanner
                                 else
                                 {
                                     ROS_INFO("The object is not liftable, now re-plan the path.");
+                                    // concatenate non-movable clouds for mapping purpose
+                                    non_movable_point_cloud_ = this->cloud_transform(current_primitive.cloud, "map", "head_rgbd_sensor_link");
+                                    non_movable_point_cloud_.header.frame_id = "head_rgbd_sensor_link";
+                                    ros::Time endTime = ros::Time::now() + ros::Duration(5);
+                                    while (ros::Time::now() < endTime)
+                                    {
+                                        non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
+                                        ros::spinOnce();
+                                        ros::Duration(0.1).sleep();
+                                    }
                                     // leave obstacle and put arm back
                                     gc_.release();
                                     ros::Duration(1).sleep();
@@ -326,13 +387,31 @@ class NamoPlanner
                                 else
                                 {
                                     ROS_INFO("The obstacle is not movable, now re-plan the path");
+                                    non_movable_point_cloud_ = this->cloud_transform(current_primitive.cloud, "map", "head_rgbd_sensor_link");
+                                    non_movable_point_cloud_.header.frame_id = "head_rgbd_sensor_link";
+                                    ros::Time endTime = ros::Time::now() + ros::Duration(5);
+                                    while (ros::Time::now() < endTime)
+                                    {
+                                        non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
+                                        ros::spinOnce();
+                                        ros::Duration(0.1).sleep();
+                                    }
+
                                     float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
                                     if (!this->move_arm(joint_state_back))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
                                     }
-                                    
+
+                                    geometry_msgs::Twist tw;
+                                    tw.linear.x = -1;
+                                    velocity_pub_.publish(tw);
+                                    ros::Duration(0.5).sleep();
+                                    tw.linear.x = 0;
+                                    velocity_pub_.publish(tw);
+                                    ros::Duration(0.5).sleep();
+
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
                                     mc.sendGoal(move_goal);
@@ -353,15 +432,18 @@ class NamoPlanner
 
   private:
     ros::NodeHandle nh_;
-    ros::Subscriber trajectory_sub_, dynamic_map_sub_, robot_pose_sub_, path_sub_;
-    ros::Publisher cancel_movebase_pub_, initial_trajectory_pub_, velocity_pub_;
+    ros::Subscriber trajectory_sub_, local_map_sub_, global_map_sub_, robot_pose_sub_, path_sub_;
+    ros::Publisher cancel_movebase_pub_, initial_trajectory_pub_, velocity_pub_, non_movable_point_cloud_pub_;
     ros::ServiceClient affordance_detect_client_;
     AffordanceValidate affordance_validate_client_;
 
     nav_msgs::Path initial_trajectory_;
-    nav_msgs::OccupancyGrid dynamic_map_;
+    nav_msgs::OccupancyGrid local_map_, global_map_;
 
-    std::string trajectory_topic_, dynamic_map_topic_, movebase_cancel_topic_, fixed_frame_, move_base_topic_;
+    pcl::PCLPointCloud2 primitive_cloud_, all_cloud_;
+    sensor_msgs::PointCloud2 non_movable_point_cloud_;
+
+    std::string trajectory_topic_, local_map_topic_, global_map_topic_, movebase_cancel_topic_, fixed_frame_, move_base_topic_;
     float robot_x_, robot_y_, inflation_radius_;
     double traj_coordinate_[2];
 
@@ -379,8 +461,6 @@ main(int argc, char *argv[])
     ROS_INFO("Namo Planner Initialized");
     double goal[2] = {atof(argv[1]), atof(argv[2])};
     namo_planner.go_namo(goal);
-
-    //ros::spin();
 
     return 0;
 }

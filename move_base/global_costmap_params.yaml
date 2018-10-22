@@ -3,3 +3,19 @@ global_costmap:
   robot_base_frame: base_link
   update_frequency: 5.0
   static_map: true
+  
+  plugins: 
+      - {name: static,           type: "costmap_2d::StaticLayer"}
+      - {name: obstacles,        type: "costmap_2d::ObstacleLayer"}
+      - {name: inflation,        type: "costmap_2d::InflationLayer"}
+
+  obstacles:
+    enabled: true
+    obstacle_range: 3.0
+    raytrace_range: 5.0
+    max_obstacle_height:    10.0            
+    min_obstacle_height:    0.02            
+    track_unknown_space: true
+    combination_method: 1
+    observation_sources: point_cloud_sensor
+    point_cloud_sensor: {sensor_frame: head_rgbd_sensor_link, data_type: PointCloud2, topic: /hsr_namo_planner/verified_obstacle_clouds, marking: true, clearing: false}

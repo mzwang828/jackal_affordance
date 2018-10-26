@@ -265,11 +265,7 @@ class NamoPlanner
                     traj_coordinate_[0] = initial_trajectory_.poses[i].pose.position.x;
                     traj_coordinate_[1] = initial_trajectory_.poses[i].pose.position.y;
                     int occupancy = this->get_occupancy(traj_coordinate_, local_map_);
-<<<<<<< HEAD
                     if (occupancy > 96)
-=======
-                    if (occupancy > 85)
->>>>>>> db040b4619c548dcd564b91c63b3b16720deb117
                     {
                         cancel_movebase_pub_.publish(empty_goal);
                         namo_state = 2;
@@ -343,11 +339,7 @@ class NamoPlanner
                                 else
                                 {
                                     ROS_INFO("The object is not liftable, now re-plan the path.");
-<<<<<<< HEAD
                                     // publish non-movable clouds for mapping purpose
-=======
-                                    // concatenate non-movable clouds for mapping purpose
->>>>>>> db040b4619c548dcd564b91c63b3b16720deb117
                                     non_movable_point_cloud_ = this->cloud_transform(current_primitive.cloud, "map", "head_rgbd_sensor_link");
                                     non_movable_point_cloud_.header.frame_id = "head_rgbd_sensor_link";
                                     ros::Time endTime = ros::Time::now() + ros::Duration(5);
@@ -428,20 +420,9 @@ class NamoPlanner
                                         return;
                                     }
 
-<<<<<<< HEAD
                                     this->move_straight(-1, 2);
                                     this->move_straight(0, 1);
                                     
-=======
-                                    geometry_msgs::Twist tw;
-                                    tw.linear.x = -1;
-                                    velocity_pub_.publish(tw);
-                                    ros::Duration(0.5).sleep();
-                                    tw.linear.x = 0;
-                                    velocity_pub_.publish(tw);
-                                    ros::Duration(0.5).sleep();
-
->>>>>>> db040b4619c548dcd564b91c63b3b16720deb117
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
                                     mc.sendGoal(move_goal);
@@ -469,17 +450,10 @@ class NamoPlanner
 
     nav_msgs::Path initial_trajectory_;
     nav_msgs::OccupancyGrid local_map_, global_map_;
-<<<<<<< HEAD
 
     pcl::PCLPointCloud2 primitive_cloud_, all_cloud_;
     sensor_msgs::PointCloud2 non_movable_point_cloud_;
 
-=======
-
-    pcl::PCLPointCloud2 primitive_cloud_, all_cloud_;
-    sensor_msgs::PointCloud2 non_movable_point_cloud_;
-
->>>>>>> db040b4619c548dcd564b91c63b3b16720deb117
     std::string trajectory_topic_, local_map_topic_, global_map_topic_, movebase_cancel_topic_, fixed_frame_, move_base_topic_;
     float robot_x_, robot_y_, inflation_radius_;
     double traj_coordinate_[2];

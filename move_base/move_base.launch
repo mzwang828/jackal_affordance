@@ -42,7 +42,7 @@
    </node>
 
    <node pkg="move_base" type="move_base" respawn="false"  name="move_base" output="screen">
-    <remap from="cmd_vel" to="/hsrb/opt_command_velocity" />
+    <remap from="cmd_vel" to="/hsrb/command_velocity" />
     <rosparam file="$(find jackal_affordance)/move_base/costmap_common_params.yaml" command="load" ns="global_costmap" /> 
     <rosparam file="$(find jackal_affordance)/move_base/costmap_common_params.yaml" command="load" ns="local_costmap" />
     <rosparam file="$(find jackal_affordance)/move_base/local_costmap_params.yaml" command="load" />

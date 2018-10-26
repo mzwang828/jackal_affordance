@@ -24,7 +24,8 @@
                 "${workspaceRoot}",
                 "/usr/include/pcl-1.8",
                 "/usr/include/eigen3",
-                "/home/mzwang/catkin_ws/src"
+                "/home/mzwang/catkin_ws/src",
+                "/usr/local/include/pcl-1.8"
             ],
             "name": "Linux",
             "intelliSenseMode": "clang-x64"

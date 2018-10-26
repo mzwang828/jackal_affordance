@@ -1,5 +1,6 @@
 #include <iostream>
 #include <math.h>
+#include <numeric>
 
 #include <ros/ros.h>
 #include <actionlib/client/simple_action_client.h>
@@ -11,6 +12,7 @@
 #include <control_msgs/FollowJointTrajectoryGoal.h>
 #include <move_base_msgs/MoveBaseAction.h>
 #include <frasier_utilities/gripper.h>
+#include <boost/circular_buffer.hpp>
 
 #include "tf/transform_datatypes.h"
 #include "jackal_affordance/ValidateAction.h"
@@ -22,7 +24,7 @@ class AffordanceValidate
 {
   public:
     AffordanceValidate(ros::NodeHandle n, std::string name) : nh_(n), gc_(n, true), validate_server_(n, name, boost::bind(&AffordanceValidate::executeCB, this, _1), false),
-                                                              action_name_(name)
+                                                              action_name_(name), torque_buffer_x_(200)
     {
         nh_.getParam("info_topic", info_topic_);
         nh_.getParam("point_cloud_topic", point_cloud_topic_);
@@ -47,6 +49,11 @@ class AffordanceValidate
         force_[1] = msg.wrench.force.y;
         force_[2] = msg.wrench.force.z; // force along the arm direction
 
+        torque_[0] = msg.wrench.torque.x;
+        torque_[1] = msg.wrench.torque.y;
+        torque_[2] = msg.wrench.torque.z; // force along the arm direction
+
+        torque_buffer_x_.push_back(torque_[0]);
         // ROS_INFO("Force : %f", force_[2]);
         // if found object is not movable, stop the move immediately
         if ((validating_ == true) && (force_[2] > force_max_))
@@ -60,6 +67,7 @@ class AffordanceValidate
             tw.angular.z = 0.0;
             velocity_pub_.publish(tw);
             result_ = false;
+            ROS_INFO("too large force %f", force_[2]);
         }
     }
 
@@ -165,14 +173,16 @@ class AffordanceValidate
                     ROS_INFO("Failed to move arm to right position");
                 }
                 ros::Duration(0.5).sleep();
-                float force_at_start = force_[2];
-                ROS_INFO("Initial Force: %f", force_at_start);
                 // contact with obstacle to validate affordance
                 geometry_msgs::Twist tw;
                 tw.linear.x = 0.1;
+                float force_at_start = force_[2];
                 velocity_pub_.publish(tw);
+                ros::Duration(0.3).sleep();
+                ROS_INFO("Initial Force: %f", force_at_start);
                 while ((force_[2] - force_at_start) < force_min_)
                 {
+                    velocity_pub_.publish(tw);
                     ROS_INFO("Force difference: %f", force_[2] - force_at_start);
                 }
                 tw.linear.x = 0.0;
@@ -180,8 +190,11 @@ class AffordanceValidate
                 ros::Duration(1).sleep();
 
                 tw.linear.x = 0.1;
-                velocity_pub_.publish(tw);
-                ros::Duration(1).sleep();
+                ros::Time endTime = ros::Time::now() + ros::Duration(1);
+                while (ros::Time::now() < endTime)
+                {
+                    velocity_pub_.publish(tw);
+                }
 
                 tw.linear.x = 0.0;
                 velocity_pub_.publish(tw);
@@ -201,10 +214,12 @@ class AffordanceValidate
                 }
                 ros::Duration(0.5).sleep();
                 gc_.release();
-                float force_at_start[3] = {force_[0], force_[1], force_[2]};
                 // go forward till contact with object
                 geometry_msgs::Twist tw;
                 tw.linear.x = 0.1;
+                float force_at_start[3] = {force_[0], force_[1], force_[2]};
+                velocity_pub_.publish(tw);
+                ros::Duration(0.3).sleep();
                 while ((force_[2] - force_at_start[2]) < force_min_)
                 {
                     velocity_pub_.publish(tw);
@@ -222,13 +237,16 @@ class AffordanceValidate
                     ROS_INFO("Failed to move arm up");
                     result_ = false;
                 }
-                ros::Duration(1).sleep();
+                ros::Duration(6).sleep();
                 // TODO: check force/torque to determine liftability
-                float weight = force_[0] - force_at_start[0];
-                if (weight < 2 || weight > 10)
+                //float force_x_avg = (std::accumulate(force_buffer_x_.begin(), force_buffer_x_.end(), 0)) / (float)force_buffer_x_.size();
+                float torque_x_avg = (std::accumulate(torque_buffer_x_.begin(), torque_buffer_x_.end(), 0.0)) / (float)torque_buffer_x_.size();
+                //float weight = force_x_avg-force_at_start[0];
+                ROS_INFO("torque %f", torque_x_avg);
+                if (torque_x_avg > 2)
                 {
                     result_ = false;
-                    ROS_INFO("Not Liftable");
+                    ROS_INFO("Non-Liftable Object");
                 }
                 else
                     ROS_INFO("Liftable Object");
@@ -296,12 +314,14 @@ class AffordanceValidate
     ros::Publisher velocity_pub_;
 
     float force_[3] = {}; //hand force x, y, z
+    float torque_[3] = {};
 
     std::string info_topic_, point_cloud_topic_, depth_topic_, force_sensor_topic_, fixed_frame_, action_name_, arm_trajectory_topic_, velocity_topic_;
     bool validating_ = false, result_ = true;
     int force_max_, force_min_;
     jackal_affordance::ValidateFeedback feedback_;
     jackal_affordance::ValidateResult action_result_;
+    boost::circular_buffer<float> torque_buffer_x_;
 
     GripperMSG gc_;
 };

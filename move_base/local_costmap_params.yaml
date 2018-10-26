@@ -8,3 +8,9 @@ local_costmap:
   width: 6.0
   height: 6.0
   resolution: 0.05
+
+  observation_sources: laser_scan_sensor #point_cloud_sensor
+
+  laser_scan_sensor: {sensor_frame: base_range_sensor_link, data_type: LaserScan, topic: /hsrb/base_scan, marking: true, clearing: true}
+
+#point_cloud_sensor: {sensor_frame: head_rgbd_sensor_link, data_type: PointCloud2, topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points, marking: false, clearing: false}

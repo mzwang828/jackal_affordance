@@ -145,8 +145,8 @@ class AffordanceDetect
         pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
         pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
         // Estimate point normals
-        pcl::PCDWriter writer;
-        writer.write("/home/mzwang/Desktop/lccp_segmented.pcd", *cloud_input, false);
+        // pcl::PCDWriter writer;
+        // writer.write("/home/mzwang/Desktop/lccp_segmented.pcd", *cloud_input, false);
         ne_.setSearchMethod(tree_);
         ne_.setInputCloud(cloud_input);
         ne_.setKSearch(50);

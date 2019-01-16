@@ -7,9 +7,6 @@
                 "path": [
                     "/home/mzwang/catkin_ws/devel/include",
                     "/opt/ros/kinetic/include",
-                    "/home/mzwang/catkin_ws/src/ros_astra_camera/include",
-                    "/home/mzwang/catkin_ws/src/contour_seg/include",
-                    "/home/mzwang/catkin_ws/src/gridmap_proc/include",
                     "/usr/include",
                     "${workspaceRoot}"
                 ]
@@ -17,14 +14,10 @@
             "includePath": [
                 "/home/mzwang/catkin_ws/devel/include",
                 "/opt/ros/kinetic/include",
-                "/home/mzwang/catkin_ws/src/ros_astra_camera/include",
-                "/home/mzwang/catkin_ws/src/contour_seg/include",
-                "/home/mzwang/catkin_ws/src/gridmap_proc/include",
                 "/usr/include",
                 "${workspaceRoot}",
                 "/usr/include/pcl-1.8",
                 "/usr/include/eigen3",
-                "/home/mzwang/catkin_ws/src",
                 "/usr/local/include/pcl-1.8"
             ],
             "name": "Linux",

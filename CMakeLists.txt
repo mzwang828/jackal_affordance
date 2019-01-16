@@ -27,6 +27,9 @@ find_package(catkin REQUIRED COMPONENTS
   actionlib_msgs
   nav_msgs
   frasier_utilities
+  hsrb_analytic_ik
+  hsrb_description
+  tmc_robot_kinematics_model
 )
 find_package(Boost REQUIRED COMPONENTS)
 
@@ -127,7 +130,7 @@ catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES jackal_affordance
   CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs std_msgs actionlib_msgs
-  tf tf_conversions message_runtime  trajectory_msgs actionlib move_base_msgs frasier_utilities
+  tf tf_conversions message_runtime  trajectory_msgs actionlib move_base_msgs frasier_utilities hsrb_analytic_ik hsrb_description tmc_robot_kinematics_model
 #  DEPENDS system_lib 
 )
 

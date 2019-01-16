@@ -1,6 +1,7 @@
 #include <iostream>
 #include <math.h>
 #include <numeric>
+#include <fstream>
 
 #include <ros/ros.h>
 #include <actionlib/client/simple_action_client.h>
@@ -14,11 +15,38 @@
 #include <frasier_utilities/gripper.h>
 #include <boost/circular_buffer.hpp>
 
+#include <Eigen/Geometry>
+#include <tmc_robot_kinematics_model/numeric_ik_solver.hpp>
+#include <tmc_robot_kinematics_model/robot_kinematics_model.hpp>
+#include <tmc_robot_kinematics_model/tarp3_wrapper.hpp>
+
 #include "tf/transform_datatypes.h"
 #include "jackal_affordance/ValidateAction.h"
 
+using Eigen::Affine3d;
+using Eigen::AngleAxisd;
+using Eigen::Translation3d;
+using Eigen::Vector3d;
+using Eigen::VectorXd;
+using std::string;
+using std::vector;
+using tmc_manipulation_types::JointState;
+using tmc_robot_kinematics_model::IKRequest;
+using tmc_robot_kinematics_model::IKSolver;
+using tmc_robot_kinematics_model::IRobotKinematicsModel;
+using tmc_robot_kinematics_model::NumericIKSolver;
+using tmc_robot_kinematics_model::Tarp3Wrapper;
+
 typedef actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction> MoveBaseClient;
 typedef actionlib::SimpleActionClient<control_msgs::FollowJointTrajectoryAction> TrajectoryClient;
+
+namespace
+{
+const uint32_t kMaxItr = 1000;
+const double kEpsilon = 0.001;
+const double kConvergeThreshold = 1e-6;
+const char *const kModelPath = "/opt/ros/kinetic/share/hsrb_description/robots/hsrb4s.urdf";
+} // namespace
 
 class AffordanceValidate
 {
@@ -107,11 +135,90 @@ class AffordanceValidate
             return false;
     }
 
-    float force_difference(float force1[3], float force2[3])
+    bool solve_ik(geometry_msgs::Point position, float (&joint_position)[5])
     {
-        return sqrt((force1[0] - force2[0]) * (force1[0] - force2[0]) +
-                    (force1[1] - force2[1]) * (force1[1] - force2[1]) +
-                    (force1[2] - force2[2]) * (force1[2] - force2[2]));
+        IKSolver::Ptr numeric_solver;
+        tmc_manipulation_types::NameSeq use_name;
+        Eigen::VectorXd weight_vector;
+        IRobotKinematicsModel::Ptr robot;
+
+        // load robot model.
+        std::string xml_string;
+        std::fstream xml_file(kModelPath, std::fstream::in);
+        while (xml_file.good())
+        {
+            std::string line;
+            std::getline(xml_file, line);
+            xml_string += (line + "\n");
+        }
+        xml_file.close();
+        robot.reset(new Tarp3Wrapper(xml_string));
+
+        numeric_solver.reset(new NumericIKSolver(
+            IKSolver::Ptr(),
+            robot,
+            ::kMaxItr,
+            ::kEpsilon,
+            ::kConvergeThreshold));
+
+        // ik joints.
+        use_name.push_back("arm_lift_joint");
+        use_name.push_back("arm_flex_joint");
+        use_name.push_back("arm_roll_joint");
+        use_name.push_back("wrist_flex_joint");
+        use_name.push_back("wrist_roll_joint");
+
+        // weight of joint angle. #1-3 weights are for base DOF.
+        weight_vector.resize(8);
+        weight_vector << 100.0, 100.0, 1.0, 5.0, 1.0, 1.0, 1.0, 1.0;
+
+        // *** make request for IK ***
+        // useing base DOF as planar movement.
+        IKRequest req(tmc_manipulation_types::kPlanar);
+        // reference frame.
+        req.frame_name = "hand_palm_link";
+        // offset from reference frame.
+        req.frame_to_end = Affine3d::Identity();
+        req.initial_angle.name = use_name;
+        // reference joint angles
+        req.initial_angle.position.resize(5);
+        req.initial_angle.position << 0.0, 0.3, 0.0, 0.3, 0.0;
+        req.use_joints = use_name;
+        req.weight = weight_vector;
+        // set robot base as origin. only the height of object center will be used.
+        req.origin_to_base = Affine3d::Identity();
+        // reference positon.
+        req.ref_origin_to_end = Translation3d(0.3, 0, position.z) * AngleAxisd(M_PI / 2, Vector3d(0, 1, 0)) * AngleAxisd(M_PI, Vector3d(0, 0, 1));
+
+        // output values.
+        JointState solution;
+        Eigen::Affine3d origin_to_hand_result;
+        Eigen::Affine3d origin_to_base_solution;
+        tmc_robot_kinematics_model::IKResult result;
+
+        // Solve.
+        result = numeric_solver->Solve(req,
+                                       solution,
+                                       origin_to_base_solution,
+                                       origin_to_hand_result);
+
+        // Print result.
+        if (result == tmc_robot_kinematics_model::kSuccess)
+        {
+            std::cout << "solved!\n"
+                      << std::endl;
+            joint_position[0] = solution.position(0);
+            joint_position[1] = solution.position(1);
+            joint_position[2] = solution.position(2);
+            joint_position[3] = solution.position(3);
+            joint_position[4] = solution.position(4);
+            return true;
+        }
+        else
+        {
+            std::cout << "ik cannot solved" << std::endl;
+            return false;
+        }
     }
 
     //////////////////////////////////////////////////////////////////////////////
@@ -159,6 +266,12 @@ class AffordanceValidate
 
         if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
         {
+            float joint_state[] = {0, 0, 0, 0, 0};
+            if (!this->solve_ik(goal->center, joint_state))
+            {
+                return;
+            }
+
             switch (goal->validate_type)
             {
             case 1:
@@ -167,8 +280,8 @@ class AffordanceValidate
                 // TODO: adjust arm position
                 validating_ = 1;
                 ROS_INFO("Straighting the arm");
-                float joint_state_a[] = {0.040, -0.23, -0.00127, -1.241, 0.000};
-                if (!this->move_arm(joint_state_a))
+                // float joint_state_a[] = {0.040, -0.23, -0.00127, -1.241, 0.000};
+                if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm to right position");
                 }
@@ -206,9 +319,9 @@ class AffordanceValidate
             {
                 //validate liftability
                 // TODO: adjust arm position
-                ROS_INFO("Straighting the arm");
-                float joint_state_b[] = {0.06, -2.62, 0.02, 1.06, -0.02};
-                if (!this->move_arm(joint_state_b))
+                ROS_INFO("Moving the arm");
+                // float joint_state_b[] = {0.06, -2.62, 0.02, 1.06, -0.02};
+                if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm to right position");
                 }
@@ -231,27 +344,49 @@ class AffordanceValidate
                 // pick up object
                 gc_.grab();
                 // lift arm slightly to check liftibility
-                float joint_state_c[] = {0.12, -2.62, 0.02, 1.06, -0.02};
-                if (!this->move_arm(joint_state_c))
+                // check force
+                // float joint_state_c[] = {0.12, -2.62, 0.02, 1.06, -0.02};
+                joint_state[0] = joint_state[0] + 0.03;
+                if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm up");
                     result_ = false;
                 }
-                ros::Duration(6).sleep();
-                // TODO: check force/torque to determine liftability
-                //float force_x_avg = (std::accumulate(force_buffer_x_.begin(), force_buffer_x_.end(), 0)) / (float)force_buffer_x_.size();
-                float torque_x_avg = (std::accumulate(torque_buffer_x_.begin(), torque_buffer_x_.end(), 0.0)) / (float)torque_buffer_x_.size();
-                //float weight = force_x_avg-force_at_start[0];
-                ROS_INFO("torque %f", torque_x_avg);
-                if (torque_x_avg > 2)
+                ros::Duration(3).sleep();
+                if (force_[0] > 50)
                 {
                     result_ = false;
-                    ROS_INFO("Non-Liftable Object");
+                    ROS_INFO("Large Lift Force, Non-Liftable Object");
+                    // put arm down
                 }
                 else
-                    ROS_INFO("Liftable Object");
+                {
+                    // check torque
+                    // float joint_state_d[] = {0.12, -2.62, 0.02, 1.06, 0.5};
+                    joint_state[4] = 0.5;
+                    if (!this->move_arm(joint_state))
+                    {
+                        ROS_INFO("Failed to move arm up");
+                        result_ = false;
+                    }
+                    ros::Duration(3).sleep();
+                    float torque_x_avg = (std::accumulate(torque_buffer_x_.begin(), torque_buffer_x_.end(), 0.0)) / (float)torque_buffer_x_.size();
+                    if (abs(torque_x_avg) > 2)
+                    {
+                        result_ = false;
+                        ROS_INFO("Large Torque, Non-Liftable Object");
+                    }
+                    // TODO: check force/torque to determine liftability
+                    //float force_x_avg = (std::accumulate(force_buffer_x_.begin(), force_buffer_x_.end(), 0)) / (float)force_buffer_x_.size();
+                    //float weight = force_x_avg-force_at_start[0];
+                    else
+                        ROS_INFO("Liftable Object");
+                }
+
                 // put arm down
-                this->move_arm(joint_state_b);
+                joint_state[0] = joint_state[0] - 0.03;
+                joint_state[4] = 0;
+                this->move_arm(joint_state);
                 /*
                 gc_.release();
                 ros::Duration(1).sleep();

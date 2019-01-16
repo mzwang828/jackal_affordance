@@ -66,6 +66,9 @@
   <build_depend>frasier_utilities</build_depend>
   <build_depend>image_geometry</build_depend>
   <build_depend>visualization_msgs</build_depend>
+  <build_depend>hsrb_analytic_ik</build_depend>
+  <build_depend>hsrb_description</build_depend>
+  <build_depend>tmc_robot_kinematics_model</build_depend>
 
 
   <exec_depend>visualization_msgs</exec_depend>
@@ -83,6 +86,9 @@
   <exec_depend>actionlib_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>frasier_utilities</exec_depend>
+  <exec_depend>hsrb_analytic_ik</exec_depend>
+  <exec_depend>hsrb_description</exec_depend>
+  <exec_depend>tmc_robot_kinematics_model</exec_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

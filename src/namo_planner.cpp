@@ -46,15 +46,18 @@ class NamoPlanner
         nh_.getParam("trajectory_topic", trajectory_topic_);
         nh_.getParam("local_map_topic", local_map_topic_);
         nh_.getParam("global_map_topic", global_map_topic_);
-        nh_.getParam("movebase_cancel_topic", movebase_cancel_topic_);
         nh_.getParam("fixed_frame", fixed_frame_);
         nh_.getParam("move_base_topic", move_base_topic_);
-        nh_.getParam("/move_base/local_costmap/inflation_layer/inflation_radius", inflation_radius_);
+        nh_.getParam("/move_base/local_costmap/inflater/inflation_radius", inflation_radius_);
+
+        std::string move_base_goal_topic = move_base_topic_ + "/goal";
+        std::string move_base_cancel_topic = move_base_topic_ + "/cancel";
 
         local_map_sub_ = nh_.subscribe(local_map_topic_, 1, &NamoPlanner::local_map_callback, this);
         global_map_sub_ = nh_.subscribe(global_map_topic_, 1, &NamoPlanner::global_map_callback, this);
         robot_pose_sub_ = nh_.subscribe("/robot_pose", 1, &NamoPlanner::pose_callback, this);
-        cancel_movebase_pub_ = nh_.advertise<actionlib_msgs::GoalID>(movebase_cancel_topic_, 1);
+        move_base_goal_sub_ = nh_.subscribe(move_base_goal_topic, 1, &NamoPlanner::move_base_goal_callback, this);
+        cancel_movebase_pub_ = nh_.advertise<actionlib_msgs::GoalID>(move_base_cancel_topic, 1);
         affordance_detect_client_ = nh_.serviceClient<jackal_affordance::AffordanceDetect>("/hsr_affordance_detect/affordance_detect");
         initial_trajectory_pub_ = nh_.advertise<nav_msgs::Path>("initial_trajectory", 1);
         path_sub_ = nh_.subscribe(trajectory_topic_, 1, &NamoPlanner::path_callback, this);
@@ -83,6 +86,11 @@ class NamoPlanner
     {
         //ROS_INFO("update path");
         initial_trajectory_ = msg;
+    }
+
+    void move_base_goal_callback(const move_base_msgs::MoveBaseActionGoal &msg)
+    {
+        this->go_namo(msg.goal);
     }
 
     bool move_arm(float joint_state[5])
@@ -154,7 +162,10 @@ class NamoPlanner
         int grid_x = (int)((position[0] - map.info.origin.position.x) / map.info.resolution);
         int grid_y = (int)((position[1] - map.info.origin.position.y) / map.info.resolution);
         int index = grid_y * map.info.width + grid_x;
-        if ((grid_x >= 0) && (grid_y >= 0) && (index < map.info.width * map.info.height))
+
+        // ROS_INFO("grid x %d, grid y %d, x %f, y %f, origin x %f, origin y %f", grid_x, grid_y, position[0], position[1], map.info.origin.position.x, map.info.origin.position.y);
+
+        if ((grid_x >= 0) && (grid_y >= 0) && (grid_x < map.info.width) && (grid_y < map.info.height))
         {
             int occupancy = map.data[index];
             return occupancy;
@@ -178,6 +189,7 @@ class NamoPlanner
     int which_primitive(double position[2], std::vector<jackal_affordance::Primitive> primitives)
     {
         //TODO: finding the real obstacle when there are offsets
+        ROS_INFO("radius: %f", inflation_radius_);
         for (int i = 0; i < primitives.size(); i++)
         {
             jackal_affordance::Primitive current_primitive = primitives[i];
@@ -225,30 +237,29 @@ class NamoPlanner
     }
 
     // accept goal, navigate while moving obstacles
-    void go_namo(double goal_position[2])
+    void go_namo(move_base_msgs::MoveBaseGoal goal)
     {
-        // send goal
+        // receive the move base goal
         MoveBaseClient mc(move_base_topic_, true);
-        move_base_msgs::MoveBaseGoal move_goal;
-        move_goal.target_pose.header.frame_id = fixed_frame_;
-        move_goal.target_pose.header.stamp = ros::Time::now();
-        move_goal.target_pose.pose.position.x = goal_position[0];
-        move_goal.target_pose.pose.position.y = goal_position[1];
-        move_goal.target_pose.pose.orientation.w = 1.0;
-        ROS_INFO("move_base goal %f, %f ", move_goal.target_pose.pose.position.x, move_goal.target_pose.pose.position.y);
-        while (!mc.waitForServer(ros::Duration(5.0)))
-        {
-            ROS_INFO("Waiting for the move_base action server to come up");
-        }
-        ROS_INFO("Sending goal");
-        mc.sendGoal(move_goal);
+        // move_base_msgs::MoveBaseGoal move_goal;
+        // move_goal.target_pose.header.frame_id = fixed_frame_;
+        // move_goal.target_pose.header.stamp = ros::Time::now();
+        // move_goal.target_pose.pose.position.x = goal_position[0];
+        // move_goal.target_pose.pose.position.y = goal_position[1];
+        // move_goal.target_pose.pose.orientation.w = 1.0;
+        // ROS_INFO("move_base goal %f, %f ", move_goal.target_pose.pose.position.x, move_goal.target_pose.pose.position.y);
+        // while (!mc.waitForServer(ros::Duration(5.0)))
+        // {
+        //     ROS_INFO("Waiting for the move_base action server to come up");
+        // }
+        ROS_INFO("NAMO received goal");
+        // mc.sendGoal(move_goal);
         ros::Duration(0.5).sleep();
-
         ros::spinOnce();
-
         int namo_state = 1;
         actionlib_msgs::GoalID empty_goal;
-        while ((abs(robot_x_ - goal_position[0]) > 0.01) || (abs(robot_y_ - goal_position[1]) > 0.01))
+
+        while ((abs(robot_x_ - goal.target_pose.pose.position.x) > 0.01) || (abs(robot_y_ - goal.target_pose.pose.position.y) > 0.01))
         {
             initial_trajectory_pub_.publish(initial_trajectory_);
             // 2 case
@@ -266,6 +277,7 @@ class NamoPlanner
                     int occupancy = this->get_occupancy(traj_coordinate_, local_map_);
                     if (occupancy > 96)
                     {
+                        // ROS_INFO("traj coor, %f, %f, occupancy %d, ", traj_coordinate_[0], traj_coordinate_[1], occupancy);
                         cancel_movebase_pub_.publish(empty_goal);
                         namo_state = 2;
                         break;
@@ -292,7 +304,7 @@ class NamoPlanner
                             ROS_INFO("Restart NAMO...");
                             namo_state = 1;
                             ROS_INFO("Sending goal");
-                            mc.sendGoal(move_goal);
+                            mc.sendGoal(goal);
                             ros::Duration(0.5).sleep();
                             break;
                         }
@@ -332,7 +344,7 @@ class NamoPlanner
                                     namo_state = 1;
                                     ros::Duration(1).sleep();
                                     ROS_INFO("Sending goal");
-                                    mc.sendGoal(move_goal);
+                                    mc.sendGoal(goal);
                                     ros::Duration(0.5).sleep();
                                 }
                                 else
@@ -374,7 +386,7 @@ class NamoPlanner
                                         namo_state = 1;
                                         ros::Duration(1).sleep();
                                         ROS_INFO("Sending goal");
-                                        mc.sendGoal(move_goal);
+                                        mc.sendGoal(goal);
                                         ros::Duration(0.5).sleep();
                                     }
                                 }
@@ -408,7 +420,7 @@ class NamoPlanner
                                     }
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
-                                    mc.sendGoal(move_goal);
+                                    mc.sendGoal(goal);
                                     ros::Duration(0.5).sleep();
                                 }
                                 else
@@ -436,7 +448,7 @@ class NamoPlanner
 
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
-                                    mc.sendGoal(move_goal);
+                                    mc.sendGoal(goal);
                                     ros::Duration(0.5).sleep();
                                 }
                             }
@@ -454,7 +466,7 @@ class NamoPlanner
 
   private:
     ros::NodeHandle nh_;
-    ros::Subscriber trajectory_sub_, local_map_sub_, global_map_sub_, robot_pose_sub_, path_sub_;
+    ros::Subscriber trajectory_sub_, local_map_sub_, global_map_sub_, robot_pose_sub_, path_sub_, move_base_goal_sub_;
     ros::Publisher cancel_movebase_pub_, initial_trajectory_pub_, velocity_pub_, non_movable_point_cloud_pub_;
     ros::ServiceClient affordance_detect_client_;
     AffordanceValidate affordance_validate_client_;
@@ -465,24 +477,24 @@ class NamoPlanner
     pcl::PCLPointCloud2 primitive_cloud_, all_cloud_;
     sensor_msgs::PointCloud2 non_movable_point_cloud_;
 
-    std::string trajectory_topic_, local_map_topic_, global_map_topic_, movebase_cancel_topic_, fixed_frame_, move_base_topic_;
+    std::string trajectory_topic_, local_map_topic_, global_map_topic_, fixed_frame_, move_base_topic_;
     float robot_x_, robot_y_, inflation_radius_;
     double traj_coordinate_[2];
 
-    GripperMSG gc_;
+    Gripper gc_;
 };
 
 main(int argc, char *argv[])
 {
-    if (argc < 3)
-        return -1;
+    // if (argc < 3)
+    //     return -1;
 
     ros::init(argc, argv, "namo_planner");
     ros::NodeHandle n("~");
     NamoPlanner namo_planner(n);
-    ROS_INFO("Namo Planner Initialized");
-    double goal[2] = {atof(argv[1]), atof(argv[2])};
-    namo_planner.go_namo(goal);
-
+    ROS_INFO("NAMO Planner Initialized");
+    // double goal[2] = {atof(argv[1]), atof(argv[2])};
+    // namo_planner.go_namo(goal);
+    ros::spin();
     return 0;
 }

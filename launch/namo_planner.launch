@@ -1,15 +1,18 @@
  <launch>
+   <!--Following launch is Deprecated-->
    <!--launch example: roslaunch jackal_affordance namo_planner.launch goal:="13 7" -->	
-   <arg name="goal"/>
-   <node pkg="robot_pose_publisher" type="robot_pose_publisher" name="robot_pose_publisher"/>
-   <node pkg="jackal_affordance" type="namo_planner" name="hsr_namo_planner" args="$(arg goal)" output="screen">
+   <!--arg name="goal"/>
+   <node pkg="jackal_affordance" type="namo_planner" name="hsr_namo_planner" args="$(arg goal)" output="screen"-->
+
+   <node pkg="jackal_affordance" type="namo_planner" name="hsr_namo_planner" output="screen">
      <rosparam>
-       trajectory_topic: /move_base/TrajectoryPlannerROS/global_plan
+       trajectory_topic: /move_base/DWAPlannerROS/global_plan
        local_map_topic: /move_base/local_costmap/costmap
        global_map_topic: /move_base/global_costmap/costmap
-       movebase_cancel_topic: /move_base/cancel
        fixed_frame: map
        move_base_topic: /move_base
      </rosparam>
    </node>
+
+   <node pkg="robot_pose_publisher" type="robot_pose_publisher" name="robot_pose_publisher"/>
  </launch>

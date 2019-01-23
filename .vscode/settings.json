@@ -38,6 +38,7 @@
         "cinttypes": "cpp",
         "typeindex": "cpp",
         "algorithm": "cpp",
-        "numeric": "cpp"
+        "numeric": "cpp",
+        "state": "cpp"
     }
 }

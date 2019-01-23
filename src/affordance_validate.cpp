@@ -328,6 +328,7 @@ class AffordanceValidate
                 ros::Duration(0.5).sleep();
                 gc_.release();
                 // go forward till contact with object
+                ros::Duration(0.5).sleep();
                 geometry_msgs::Twist tw;
                 tw.linear.x = 0.1;
                 float force_at_start[3] = {force_[0], force_[1], force_[2]};
@@ -346,7 +347,7 @@ class AffordanceValidate
                 // lift arm slightly to check liftibility
                 // check force
                 // float joint_state_c[] = {0.12, -2.62, 0.02, 1.06, -0.02};
-                joint_state[0] = joint_state[0] + 0.03;
+                joint_state[0] = joint_state[0] + 0.05;
                 if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm up");
@@ -458,7 +459,7 @@ class AffordanceValidate
     jackal_affordance::ValidateResult action_result_;
     boost::circular_buffer<float> torque_buffer_x_;
 
-    GripperMSG gc_;
+    Gripper gc_;
 };
 
 main(int argc, char **argv)

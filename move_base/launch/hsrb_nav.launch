@@ -1,0 +1,12 @@
+<launch>
+
+  <!-- Map server -->
+  <node name="map_server" pkg="map_server" type="map_server" args="/home/mzwang/Documents/hsr_simu/map.pgm 0.05" />
+
+  <!-- Localization -->
+  <include file="$(find jackal_affordance)/move_base/launch/include/amcl.launch.xml"/>
+
+  <!-- Move base conroller -->
+  <include file="$(find jackal_affordance)/move_base/launch/include/move_base.launch.xml"/>
+
+</launch>

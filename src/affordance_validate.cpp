@@ -96,6 +96,7 @@ class AffordanceValidate
             velocity_pub_.publish(tw);
             result_ = false;
             ROS_INFO("too large force %f", force_[2]);
+            validating_ = false;
         }
     }
 
@@ -278,42 +279,45 @@ class AffordanceValidate
             {
                 //validate pushability
                 // TODO: adjust arm position
-                validating_ = 1;
-                ROS_INFO("Straighting the arm");
-                // float joint_state_a[] = {0.040, -0.23, -0.00127, -1.241, 0.000};
-                if (!this->move_arm(joint_state))
+                validating_ = true;
+                while (validating_ == true)
                 {
-                    ROS_INFO("Failed to move arm to right position");
-                }
-                ros::Duration(0.5).sleep();
-                // contact with obstacle to validate affordance
-                geometry_msgs::Twist tw;
-                tw.linear.x = 0.1;
-                float force_at_start = force_[2];
-                velocity_pub_.publish(tw);
-                ros::Duration(0.3).sleep();
-                ROS_INFO("Initial Force: %f", force_at_start);
-                while ((force_[2] - force_at_start) < force_min_)
-                {
+                    ROS_INFO("Straighting the arm");
+                    // float joint_state_a[] = {0.040, -0.23, -0.00127, -1.241, 0.000};
+                    if (!this->move_arm(joint_state))
+                    {
+                        ROS_INFO("Failed to move arm to right position");
+                    }
+                    ros::Duration(0.5).sleep();
+                    // contact with obstacle to validate affordance
+                    geometry_msgs::Twist tw;
+                    tw.linear.x = 0.1;
+                    float force_at_start = force_[2];
                     velocity_pub_.publish(tw);
-                    ROS_INFO("Force difference: %f", force_[2] - force_at_start);
-                }
-                tw.linear.x = 0.0;
-                velocity_pub_.publish(tw);
-                ros::Duration(1).sleep();
-
-                tw.linear.x = 0.1;
-                ros::Time endTime = ros::Time::now() + ros::Duration(1);
-                while (ros::Time::now() < endTime)
-                {
+                    ros::Duration(0.3).sleep();
+                    ROS_INFO("Initial Force: %f", force_at_start);
+                    while ((force_[2] - force_at_start) < force_min_)
+                    {
+                        velocity_pub_.publish(tw);
+                        ROS_INFO("Force difference: %f", force_[2] - force_at_start);
+                    }
+                    tw.linear.x = 0.0;
                     velocity_pub_.publish(tw);
+                    ros::Duration(1).sleep();
+
+                    tw.linear.x = 0.1;
+                    ros::Time endTime = ros::Time::now() + ros::Duration(1);
+                    while (ros::Time::now() < endTime)
+                    {
+                        velocity_pub_.publish(tw);
+                    }
+
+                    tw.linear.x = 0.0;
+                    velocity_pub_.publish(tw);
+                    ros::Duration(1).sleep();
+
+                    break;
                 }
-
-                tw.linear.x = 0.0;
-                velocity_pub_.publish(tw);
-                ros::Duration(1).sleep();
-
-                break;
             }
             case 2:
             {

@@ -18,6 +18,7 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <image_geometry/pinhole_camera_model.h>
 #include <visualization_msgs/Marker.h>
@@ -74,7 +75,7 @@ class AffordanceDetect
     }
 
     bool point_cloud_transform()
-    // transform the point cloud to target frame, which is /map in most cases
+    // transform the point cloud to target frame, /map
     {
         cloud_transformed_->clear();
         std::string filter_frame = "base_link";
@@ -106,10 +107,10 @@ class AffordanceDetect
         pcl::PassThrough<PointT> pass;
         pass.setInputCloud(cloud_filtered_);
         pass.setFilterFieldName("x");
-        pass.setFilterLimits(0, 10);
+        pass.setFilterLimits(0, 5);
         pass.filter(*cloud_filtered_);
         pass.setFilterFieldName("z");
-        pass.setFilterLimits(0.02, 100);
+        pass.setFilterLimits(0.05, 100);
         pass.filter(*cloud_filtered_);
 
         //transform to fxied frame for future computation
@@ -154,9 +155,9 @@ class AffordanceDetect
         // Create the segmentation object
         // Optional
         seg_.setOptimizeCoefficients(true);
-        seg_.setMaxIterations(500); // iteration limits decides segmentation goodness
+        seg_.setMaxIterations(1000); // iteration limits decides segmentation goodness
         seg_.setMethodType(pcl::SAC_RANSAC);
-        seg_.setDistanceThreshold(0.03);
+        seg_.setDistanceThreshold(0.02);
         seg_.setNormalDistanceWeight(0.1);
         int no_primitives = 0;
         while (true)
@@ -175,15 +176,17 @@ class AffordanceDetect
             // Obtain the cylinder inliers and coefficients
             seg_.setModelType(pcl::SACMODEL_CYLINDER);
             seg_.setNormalDistanceWeight(0.1);
-            seg_.setMaxIterations(1000);
+            seg_.setMaxIterations(10000);
             seg_.setDistanceThreshold(0.05);
-            seg_.setRadiusLimits(0, 0.15);
+            seg_.setRadiusLimits(0, 0.1);
+            Eigen::Vector3f axis = Eigen::Vector3f(1.0, 0.0, 0.0);
+            seg_.setAxis(axis);
             seg_.segment(*inliers_cylinder, *coefficients_cylinder);
 
             //ROS_INFO("vertical plane %d, horizontal %d, cylinder %d", inliers_vplane->indices.size(), inliers_hplane->indices.size(), inliers_cylinder->indices.size());
             ROS_INFO("plane %d, cylinder %d", inliers_plane->indices.size(), inliers_cylinder->indices.size());
 
-            int best = this->maximum(1.5 * inliers_plane->indices.size(), inliers_cylinder->indices.size());
+            int best = this->maximum(inliers_plane->indices.size(), inliers_cylinder->indices.size());
 
             //ROS_INFO("best %d", best);
 
@@ -206,9 +209,9 @@ class AffordanceDetect
                 std::cout << "PS: no primitive found!!!" << std::endl;
                 return false;
             }
-            else if ((inliers->indices.size() < min_primitive_size_) || (float(inliers->indices.size())/float((initial_size)) < 0.2))
+            else if ((inliers->indices.size() < min_primitive_size_) || (float(inliers->indices.size()) / float((initial_size)) < 0.2))
             {
-                ROS_INFO("inlinder: %d, initial: %d", inliers->indices.size() ,initial_size);
+                ROS_INFO("Inliers doesn't meet requirement: inliers: %d, initial: %d", inliers->indices.size(), initial_size);
                 break;
             }
             // generate the primitive msg
@@ -288,10 +291,14 @@ class AffordanceDetect
                 }
                 float plane_area = height * length;
                 ROS_INFO("Plane_area: %f, height: %f, length: %f", plane_area, height, length);
-                if (plane_area < max_plane_area_ && height / length < 25 && length / height < 25)
+                if ((plane_area < max_plane_area_) && ((height / length) < 10) && ((length / height) < 10))
                 {
                     primitives.push_back(primitive_msg);
                     no_primitives++;
+                }
+                else
+                {
+                    ROS_INFO("Plane size doesn't meet requirement.\n");
                 }
             }
 
@@ -319,7 +326,7 @@ class AffordanceDetect
             extract_normals_.setIndices(inliers);
             extract_normals_.filter(*cloud_normals);
             ros::Duration(0.2).sleep();
-        }   
+        }
         std::cout << "PS: " << no_primitives << ". primitives segmented!" << std::endl;
         return true;
     }
@@ -398,10 +405,16 @@ class AffordanceDetect
     bool primitive_extract()
     {
         primitives_.resize(0);
+        // remove outlier
+        pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_noise;
+        sor_noise.setInputCloud(cloud_transformed_);
+        sor_noise.setMeanK(50);
+        sor_noise.setStddevMulThresh(1.0);
+        sor_noise.filter(*cloud_transformed_);
         // down sampling the point cloud
         pcl::VoxelGrid<PointT> sor;
         sor.setInputCloud(cloud_transformed_);
-        sor.setLeafSize(0.01f, 0.01f, 0.01f);
+        sor.setLeafSize(0.005f, 0.005f, 0.005f);
         sor.filter(*cloud_transformed_);
         //LCCP Segmentation: SuperVoxel + LCCP
         //STEP1: 超体聚类 set parameters
@@ -436,9 +449,9 @@ class AffordanceDetect
         // Set parameters
         float concavity_tolerance_threshold = 10;
         float smoothness_threshold = 0.1;
-        uint32_t min_segment_size = 0;
+        uint32_t min_segment_size = 100;
         bool use_extended_convexity = false;
-        bool use_sanity_criterion = false;
+        bool use_sanity_criterion = true;
         // Perform LCCP Segmentation
         pcl::LCCPSegmentation<PointT> lccp;
         lccp.setConcavityToleranceThreshold(concavity_tolerance_threshold);
@@ -502,6 +515,8 @@ class AffordanceDetect
             pcl::toROSMsg(*cloud_temp, lccp_labeled_cloud_);
             lccp_labeled_cloud_.header.frame_id = fixed_frame_;
             lccp_cloud_pub_.publish(lccp_labeled_cloud_);
+
+            getchar();
 
             //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_)

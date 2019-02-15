@@ -39,6 +39,7 @@
         "typeindex": "cpp",
         "algorithm": "cpp",
         "numeric": "cpp",
-        "state": "cpp"
+        "state": "cpp",
+        "numericaldiff": "cpp"
     }
 }

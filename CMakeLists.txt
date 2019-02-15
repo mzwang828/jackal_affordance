@@ -4,6 +4,9 @@ project(jackal_affordance)
 ## Compile as C++11, supported in ROS Kinetic and newer
   add_compile_options(-std=c++11)
 
+#For debug
+SET( CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x -Winline -gdwarf-2 -g3  " )
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages

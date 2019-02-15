@@ -5,7 +5,7 @@ int32 primitive_type
 int32 validate_type
 ---
 #result definition
-bool result
+int32 result
 ---
 #feedback
 geometry_msgs/Point center

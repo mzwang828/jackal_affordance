@@ -11,7 +11,7 @@
 #include <actionlib_msgs/GoalID.h>
 #include <nav_msgs/OccupancyGrid.h>
 #include <move_base_msgs/MoveBaseAction.h>
-#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 
 #include <pcl/point_types.h>
 #include <pcl/common/common_headers.h>
@@ -55,7 +55,7 @@ class NamoPlanner
 
         local_map_sub_ = nh_.subscribe(local_map_topic_, 1, &NamoPlanner::local_map_callback, this);
         global_map_sub_ = nh_.subscribe(global_map_topic_, 1, &NamoPlanner::global_map_callback, this);
-        robot_pose_sub_ = nh_.subscribe("/robot_pose", 1, &NamoPlanner::pose_callback, this);
+        robot_pose_sub_ = nh_.subscribe("/amcl_pose", 1, &NamoPlanner::pose_callback, this);
         move_base_goal_sub_ = nh_.subscribe(move_base_goal_topic, 1, &NamoPlanner::move_base_goal_callback, this);
         cancel_movebase_pub_ = nh_.advertise<actionlib_msgs::GoalID>(move_base_cancel_topic, 1);
         affordance_detect_client_ = nh_.serviceClient<jackal_affordance::AffordanceDetect>("/hsr_affordance_detect/affordance_detect");
@@ -75,11 +75,12 @@ class NamoPlanner
         global_map_ = msg;
     }
 
-    void pose_callback(const geometry_msgs::Pose &msg)
+    void pose_callback(const geometry_msgs::PoseWithCovarianceStamped &msg)
     {
         //ROS_INFO("update robot pose");
-        robot_x_ = msg.position.x;
-        robot_y_ = msg.position.y;
+        robot_x_ = msg.pose.pose.position.x;
+        robot_y_ = msg.pose.pose.position.y;
+        ROS_ERROR("ttt");
     }
 
     void path_callback(const nav_msgs::Path &msg)
@@ -225,6 +226,9 @@ class NamoPlanner
             else if (current_primitive.type == 3)
             {
                 double distance_radius = sqrt((traj_vector[0] * traj_vector[0] + traj_vector[1] * traj_vector[1]));
+                // DEBUG: check distance
+                ROS_INFO("distance from cylinder center %f, inflation area %f", distance_radius, current_primitive.coef[6] + inflation_radius_);
+                getchar();
                 if (distance_radius < (current_primitive.coef[6] + inflation_radius_))
                 {
                     ROS_INFO("Found obstacle primitive (Cylinder)");
@@ -279,6 +283,7 @@ class NamoPlanner
                     {
                         // ROS_INFO("traj coor, %f, %f, occupancy %d, ", traj_coordinate_[0], traj_coordinate_[1], occupancy);
                         cancel_movebase_pub_.publish(empty_goal);
+                        ros::Duration(1).sleep();
                         namo_state = 2;
                         break;
                     }
@@ -329,7 +334,7 @@ class NamoPlanner
                             if ((affordance_validate_client_.getState() == actionlib::SimpleClientGoalState::SUCCEEDED))
                             {
                                 jackal_affordance::ValidateResult validate_result = *affordance_validate_client_.getResult();
-                                if (validate_result.result)
+                                if (validate_result.result == 2)
                                 {
                                     ROS_INFO("The object is liftable. Pick up to continue.");
                                     //TODO: Pick up obstacle
@@ -347,48 +352,42 @@ class NamoPlanner
                                     mc.sendGoal(goal);
                                     ros::Duration(0.5).sleep();
                                 }
+                                else if (validate_result.result == 1)
+                                {
+                                    ROS_INFO("The object is pushable.");
+                                    //TODO: push;
+                                }
                                 else
                                 {
-                                    ROS_INFO("The object is not liftable, now test if pushable.");
-                                    validate_goal.validate_type = 1;
-                                    affordance_validate_client_.sendGoal(validate_goal);
-                                    affordance_validate_client_.waitForResult();
-                                    if ((affordance_validate_client_.getState() == actionlib::SimpleClientGoalState::SUCCEEDED))
+                                    ROS_INFO("The object is not movable, now replan the path.");
+                                    // publish non-movable clouds for mapping purpose
+                                    non_movable_point_cloud_ = this->cloud_transform(current_primitive.cloud, "map", "head_rgbd_sensor_link");
+                                    non_movable_point_cloud_.header.frame_id = "head_rgbd_sensor_link";
+                                    ros::Time endTime = ros::Time::now() + ros::Duration(5);
+                                    while (ros::Time::now() < endTime)
                                     {
-                                        //push the object to certain position
+                                        non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
+                                        ros::spinOnce();
+                                        ros::Duration(0.1).sleep();
                                     }
-                                    else
+                                    // leave obstacle and put arm back
+                                    gc_.release();
+                                    ros::Duration(1).sleep();
+                                    this->move_straight(-1, 2);
+                                    this->move_straight(0, 1);
+                                    float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
+                                    gc_.grab();
+                                    if (!this->move_arm(joint_state_back))
                                     {
-                                        ROS_INFO("The object is not movable, now replan the path.");
-                                        // publish non-movable clouds for mapping purpose
-                                        non_movable_point_cloud_ = this->cloud_transform(current_primitive.cloud, "map", "head_rgbd_sensor_link");
-                                        non_movable_point_cloud_.header.frame_id = "head_rgbd_sensor_link";
-                                        ros::Time endTime = ros::Time::now() + ros::Duration(5);
-                                        while (ros::Time::now() < endTime)
-                                        {
-                                            non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
-                                            ros::spinOnce();
-                                            ros::Duration(0.1).sleep();
-                                        }
-                                        // leave obstacle and put arm back
-                                        gc_.release();
-                                        ros::Duration(1).sleep();
-                                        this->move_straight(-1, 2);
-                                        this->move_straight(0, 1);
-                                        float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
-                                        gc_.grab();
-                                        if (!this->move_arm(joint_state_back))
-                                        {
-                                            ROS_INFO("Failed to move arm back");
-                                            return;
-                                        }
+                                        ROS_INFO("Failed to move arm back");
+                                        return;
+                                    }
 
-                                        namo_state = 1;
-                                        ros::Duration(1).sleep();
-                                        ROS_INFO("Sending goal");
-                                        mc.sendGoal(goal);
-                                        ros::Duration(0.5).sleep();
-                                    }
+                                    namo_state = 1;
+                                    ros::Duration(1).sleep();
+                                    ROS_INFO("Sending goal");
+                                    mc.sendGoal(goal);
+                                    ros::Duration(0.5).sleep();
                                 }
                             }
                             else
@@ -406,7 +405,7 @@ class NamoPlanner
                             if ((affordance_validate_client_.getState() == actionlib::SimpleClientGoalState::SUCCEEDED))
                             {
                                 jackal_affordance::ValidateResult validate_result = *affordance_validate_client_.getResult();
-                                if (validate_result.result)
+                                if (validate_result.result == 1)
                                 {
                                     ROS_INFO("The obstacle is movable, now moving the obstacle to clear the path");
                                     this->move_straight(1, 2);

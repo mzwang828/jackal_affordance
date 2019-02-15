@@ -78,22 +78,19 @@ class AffordanceDetect
     // transform the point cloud to target frame, /map
     {
         cloud_transformed_->clear();
-        std::string filter_frame = "base_link";
+        filter_frame_ = "/base_link";
         pcl::PointCloud<PointT>::Ptr cloud_raw_pcl(new pcl::PointCloud<PointT>);
         pcl::fromROSMsg(cloud_raw_, *cloud_raw_pcl);
         std::string source_frame = cloud_raw_.header.frame_id;
         tf::TransformListener listener;
 
-        // transform to odom frame to filter first
-        listener.waitForTransform(filter_frame, source_frame, ros::Time(0), ros::Duration(10.0));
+        // transform to base link frame to filter first
+        listener.waitForTransform(filter_frame_, source_frame, ros::Time(0), ros::Duration(10.0));
         tf::StampedTransform transform;
-        tf::Transform tf_transform;
         Eigen::Affine3d eigen_transform;
         try
         {
-            listener.lookupTransform(filter_frame, source_frame, ros::Time(0), transform);
-            tf_transform.setOrigin(transform.getOrigin());
-            tf_transform.setRotation(transform.getRotation());
+            listener.lookupTransform(filter_frame_, source_frame, ros::Time(0), transform);
             tf::transformTFToEigen(transform, eigen_transform);
             pcl::transformPointCloud(*cloud_raw_pcl, *cloud_filtered_, eigen_transform);
         }
@@ -113,23 +110,26 @@ class AffordanceDetect
         pass.setFilterLimits(0.05, 100);
         pass.filter(*cloud_filtered_);
 
-        //transform to fxied frame for future computation
-        listener.waitForTransform(fixed_frame_, filter_frame, ros::Time(0), ros::Duration(10.0));
-        try
-        {
-            listener.lookupTransform(fixed_frame_, filter_frame, ros::Time(0), transform);
-            tf_transform.setOrigin(transform.getOrigin());
-            tf_transform.setRotation(transform.getRotation());
-            tf::transformTFToEigen(transform, eigen_transform);
-            pcl::transformPointCloud(*cloud_filtered_, *cloud_transformed_, eigen_transform);
-            std::cout << "Point cloud transformed";
-            return true;
-        }
-        catch (tf::TransformException ex)
-        {
-            ROS_ERROR("%s", ex.what());
-            return false;
-        }
+        cloud_transformed_ = cloud_filtered_;
+
+        return true;
+
+        // //transform to fxied frame for future computation
+        // listener.waitForTransform(fixed_frame_, filter_frame, ros::Time(0), ros::Duration(10.0));
+        // try
+        // {
+        //     listener.lookupTransform(fixed_frame_, filter_frame, ros::Time(0), transform);
+        //     // listener.lookupTransform(filter_frame, fixed_frame_, ros::Time(0), transform);
+        //     tf::transformTFToEigen(transform, eigen_transform);
+        //     pcl::transformPointCloud(*cloud_filtered_, *cloud_transformed_, eigen_transform);
+        //     std::cout << "Point cloud transformed";
+        //     return true;
+        // }
+        // catch (tf::TransformException ex)
+        // {
+        //     ROS_ERROR("%s", ex.what());
+        //     return false;
+        // }
     }
 
     int maximum(int a, int b)
@@ -140,14 +140,21 @@ class AffordanceDetect
 
     bool primitive_segmentation(std::vector<jackal_affordance::Primitive> &primitives, pcl::PointCloud<PointT>::Ptr cloud_input)
     {
+        // remove outliers
+        pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_noise;
+        sor_noise.setInputCloud(cloud_input);
+        sor_noise.setMeanK(50);
+        sor_noise.setStddevMulThresh(1.0);
+        sor_noise.filter(*cloud_input);
         // find all primitives from given point cloud input
         int initial_size = cloud_input->size();
+        pcl::PointCloud<PointT>::Ptr cloud_primitive_raw(new pcl::PointCloud<PointT>);
         pcl::PointCloud<PointT>::Ptr cloud_primitive(new pcl::PointCloud<PointT>);
         pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
         pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
         // Estimate point normals
-        // pcl::PCDWriter writer;
-        // writer.write("/home/mzwang/Desktop/lccp_segmented.pcd", *cloud_input, false);
+        pcl::PCDWriter writer;
+        writer.write("/home/mzwang/Desktop/lccp_segmented.pcd", *cloud_input, false);
         ne_.setSearchMethod(tree_);
         ne_.setInputCloud(cloud_input);
         ne_.setKSearch(50);
@@ -160,6 +167,8 @@ class AffordanceDetect
         seg_.setDistanceThreshold(0.02);
         seg_.setNormalDistanceWeight(0.1);
         int no_primitives = 0;
+        // record primitives' center to prevent overlap, first number used to record if major primitive detected
+        float major_center[4] = {0, 0, 0, 0};
         while (true)
         {
             // coefficients & inliers for cylinder, vertical plane and horizontal plane
@@ -179,11 +188,11 @@ class AffordanceDetect
             seg_.setMaxIterations(10000);
             seg_.setDistanceThreshold(0.05);
             seg_.setRadiusLimits(0, 0.1);
-            Eigen::Vector3f axis = Eigen::Vector3f(1.0, 0.0, 0.0);
-            seg_.setAxis(axis);
+            // Eigen::Vector3f axis = Eigen::Vector3f(0.0, 0.0, 1.0);
+            // seg_.setAxis(axis);
             seg_.segment(*inliers_cylinder, *coefficients_cylinder);
 
-            //ROS_INFO("vertical plane %d, horizontal %d, cylinder %d", inliers_vplane->indices.size(), inliers_hplane->indices.size(), inliers_cylinder->indices.size());
+            //ROS_INFO("vertical plane %d, horizontal %d, cylinder %d", inliers_vplane->indices.size(), inliers_hplane ->indices.size(), inliers_cylinder->indices.size());
             ROS_INFO("plane %d, cylinder %d", inliers_plane->indices.size(), inliers_cylinder->indices.size());
 
             int best = this->maximum(inliers_plane->indices.size(), inliers_cylinder->indices.size());
@@ -218,7 +227,25 @@ class AffordanceDetect
             extract_.setInputCloud(cloud_input);
             extract_.setNegative(false);
             extract_.setIndices(inliers);
-            extract_.filter(*cloud_primitive);
+            extract_.filter(*cloud_primitive_raw);
+
+            // transform primitive points to fixed frame
+            tf::TransformListener listener;
+            Eigen::Affine3d eigen_transform;
+            tf::StampedTransform transform;
+            listener.waitForTransform(fixed_frame_, filter_frame_, ros::Time(0), ros::Duration(10.0));
+            try
+            {
+                listener.lookupTransform(fixed_frame_, filter_frame_, ros::Time(0), transform);
+                tf::transformTFToEigen(transform, eigen_transform);
+                pcl::transformPointCloud(*cloud_primitive_raw, *cloud_primitive, eigen_transform);
+                std::cout << "Point cloud transformed \n";
+            }
+            catch (tf::TransformException ex)
+            {
+                ROS_ERROR("%s", ex.what());
+                return false;
+            }
 
             chull_.setInputCloud(cloud_primitive);
             //chull_.setDimension(2);
@@ -238,6 +265,24 @@ class AffordanceDetect
             primitive_msg.center.x = center[0];
             primitive_msg.center.y = center[1];
             primitive_msg.center.z = center[2];
+
+            // compare center distance to avoid overlap TODO:improve overlap detection
+            if (major_center[0] == 0)
+            {
+                major_center[0] = 1;
+                major_center[1] = primitive_msg.center.x;
+                major_center[2] = primitive_msg.center.y;
+                major_center[3] = primitive_msg.center.z;
+            }
+            else
+            {
+                float distance = sqrt((primitive_msg.center.x - major_center[1]) * (primitive_msg.center.x - major_center[1]) +
+                                      (primitive_msg.center.y - major_center[2]) * (primitive_msg.center.y - major_center[2]) +
+                                      (primitive_msg.center.z - major_center[3]) * (primitive_msg.center.z - major_center[3]));
+                ROS_INFO("distance %f", distance);
+                if (distance < 0.1)
+                    break;
+            }
 
             // Get primitive min and max values
             primitive_msg.min.x = min_vals[0];
@@ -312,6 +357,7 @@ class AffordanceDetect
                 primitive_msg.normal[1] = coefficients->values[4];
                 primitive_msg.normal[2] = coefficients->values[5];
 
+                ROS_INFO("cylinder normal %f, %f, %f", primitive_msg.normal[0], primitive_msg.normal[1], primitive_msg.normal[2]);
                 primitive_msg.size.data = cloud_primitive->points.size();
                 // TODO: check horizontal cylinder in addition to vertical cylinder
                 primitive_msg.is_vertical = true;
@@ -319,6 +365,7 @@ class AffordanceDetect
                 no_primitives++;
             }
 
+            // remve primitive clouds
             extract_.setNegative(true);
             extract_.filter(*cloud_input);
             extract_normals_.setNegative(true);
@@ -513,10 +560,10 @@ class AffordanceDetect
             ROS_INFO("temp cloud size: %d", cloud_temp->size());
 
             pcl::toROSMsg(*cloud_temp, lccp_labeled_cloud_);
-            lccp_labeled_cloud_.header.frame_id = fixed_frame_;
+            lccp_labeled_cloud_.header.frame_id = filter_frame_;
             lccp_cloud_pub_.publish(lccp_labeled_cloud_);
 
-            getchar();
+            // getchar();
 
             //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_)
@@ -582,7 +629,7 @@ class AffordanceDetect
 
     int min_primitive_size_, min_seg_size_, max_plane_area_;
     float seed_res_, voxel_res_;
-    std::string info_topic_, rgb_topic_, point_cloud_topic_, fixed_frame_;
+    std::string info_topic_, rgb_topic_, point_cloud_topic_, fixed_frame_, filter_frame_;
     std::vector<jackal_affordance::Primitive> primitives_;
 };
 

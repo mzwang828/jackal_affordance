@@ -41,7 +41,7 @@ typedef actionlib::SimpleActionClient<control_msgs::FollowJointTrajectoryAction>
 class NamoPlanner
 {
   public:
-    NamoPlanner(ros::NodeHandle n) : nh_(n), affordance_validate_client_("/hsr_affordance_validate/affordance_validate/", true), gc_(n, true)
+    NamoPlanner(ros::NodeHandle n) : nh_(n), affordance_validate_client_("/hsr_affordance_validate/affordance_validate/", true), gc_(n, true), joint_state_init_({0.05, 0, -1.57, -1.57, 0})
     {
         nh_.getParam("trajectory_topic", trajectory_topic_);
         nh_.getParam("local_map_topic", local_map_topic_);
@@ -80,7 +80,6 @@ class NamoPlanner
         //ROS_INFO("update robot pose");
         robot_x_ = msg.pose.pose.position.x;
         robot_y_ = msg.pose.pose.position.y;
-        ROS_ERROR("ttt");
     }
 
     void path_callback(const nav_msgs::Path &msg)
@@ -94,7 +93,7 @@ class NamoPlanner
         this->go_namo(msg.goal);
     }
 
-    bool move_arm(float joint_state[5])
+    bool move_arm(double joint_state[5])
     {
         TrajectoryClient tc("/hsrb/arm_trajectory_controller/follow_joint_trajectory", true);
         tc.waitForServer();
@@ -283,6 +282,7 @@ class NamoPlanner
                     {
                         // ROS_INFO("traj coor, %f, %f, occupancy %d, ", traj_coordinate_[0], traj_coordinate_[1], occupancy);
                         cancel_movebase_pub_.publish(empty_goal);
+                        // wait for point cloud to update
                         ros::Duration(1).sleep();
                         namo_state = 2;
                         break;
@@ -339,8 +339,8 @@ class NamoPlanner
                                     ROS_INFO("The object is liftable. Pick up to continue.");
                                     //TODO: Pick up obstacle
                                     ros::Duration(1).sleep();
-                                    float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
-                                    if (!this->move_arm(joint_state_back))
+                                    // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
+                                    if (!this->move_arm(joint_state_init_))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
@@ -375,9 +375,9 @@ class NamoPlanner
                                     ros::Duration(1).sleep();
                                     this->move_straight(-1, 2);
                                     this->move_straight(0, 1);
-                                    float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
+                                    // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
                                     gc_.grab();
-                                    if (!this->move_arm(joint_state_back))
+                                    if (!this->move_arm(joint_state_init_))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
@@ -410,9 +410,11 @@ class NamoPlanner
                                     ROS_INFO("The obstacle is movable, now moving the obstacle to clear the path");
                                     this->move_straight(1, 2);
                                     this->move_straight(0, 1);
-
-                                    float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
-                                    if (!this->move_arm(joint_state_back))
+                                    ros::Duration(0.5).sleep();
+                                    this->move_straight(-1, 2);
+                                    this->move_straight(0, 1);
+                                    // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
+                                    if (!this->move_arm(joint_state_init_))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
@@ -435,8 +437,8 @@ class NamoPlanner
                                         ros::Duration(0.1).sleep();
                                     }
 
-                                    float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
-                                    if (!this->move_arm(joint_state_back))
+                                    // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
+                                    if (!this->move_arm(joint_state_init_))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
@@ -478,7 +480,7 @@ class NamoPlanner
 
     std::string trajectory_topic_, local_map_topic_, global_map_topic_, fixed_frame_, move_base_topic_;
     float robot_x_, robot_y_, inflation_radius_;
-    double traj_coordinate_[2];
+    double traj_coordinate_[2], joint_state_init_[5];
 
     Gripper gc_;
 };

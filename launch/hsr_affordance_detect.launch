@@ -6,7 +6,7 @@
        point_cloud_topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points
        fixed_frame: /map
        min_primitive_size: 100
-       max_plane_area: 5
+       max_plane_area: 10
        min_seg_size: 200
        seed_resolution: 0.3
        voxel_resolution: 0.03

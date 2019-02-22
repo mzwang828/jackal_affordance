@@ -321,7 +321,7 @@ class AffordanceValidate
                 //validate liftability
                 result_ = 2;
                 // TODO: adjust arm position
-                ROS_INFO("Moving the arm");
+                ROS_INFO("Validating liftability...");
                 if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm to right position");
@@ -391,7 +391,7 @@ class AffordanceValidate
                 // validating_ = true;
                 // while (validating_ == true)
                 // {
-                ROS_INFO("Straighting the arm");
+                ROS_INFO("Validating pushability...");
                 if (!this->move_arm(joint_state))
                 {
                     ROS_INFO("Failed to move arm to right position");
@@ -407,19 +407,20 @@ class AffordanceValidate
                 while ((force_[2] - force_at_start) < force_min_)
                 {
                     velocity_pub_.publish(tw);
-                    ROS_INFO("Force difference: %f", force_[2] - force_at_start);
+                    // ROS_INFO("Force difference: %f", force_[2] - force_at_start);
                 }
                 tw.linear.x = 0.0;
                 velocity_pub_.publish(tw);
                 ros::Duration(1).sleep();
 
                 tw.linear.x = 0.1;
-                ros::Time endTime = ros::Time::now() + ros::Duration(1);
+                ros::Time endTime = ros::Time::now() + ros::Duration(0.5);
                 while (ros::Time::now() < endTime)
                 {
                     velocity_pub_.publish(tw);
                     if (force_[2] > push_force_max_)
                     {
+                        ROS_INFO("Validation Failed, Non-Movable Object");
                         result_ = 0;
                         break;
                     }

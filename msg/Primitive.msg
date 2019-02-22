@@ -12,3 +12,5 @@ std_msgs/Int32 size
 sensor_msgs/PointCloud2 cloud
 bool is_vertical
 int32 type
+geometry_msgs/Point object_center
+geometry_msgs/Point32[] object_polygon

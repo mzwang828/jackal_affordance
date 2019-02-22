@@ -40,6 +40,8 @@
         "algorithm": "cpp",
         "numeric": "cpp",
         "state": "cpp",
-        "numericaldiff": "cpp"
+        "numericaldiff": "cpp",
+        "boundingbox": "cpp",
+        "boundingsphere": "cpp"
     }
 }

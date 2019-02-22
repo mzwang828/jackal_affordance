@@ -19,6 +19,8 @@
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/project_inliers.h>
+
 #include <pcl_conversions/pcl_conversions.h>
 #include <image_geometry/pinhole_camera_model.h>
 #include <visualization_msgs/Marker.h>
@@ -165,14 +167,65 @@ class AffordanceDetect
         seg_.setDistanceThreshold(0.02);
         seg_.setNormalDistanceWeight(0.1);
         int no_primitives = 0;
+
+        // Calculate object center and its polygon
+        // transform object points to fixed frame
+        tf::TransformListener listener;
+        Eigen::Affine3d eigen_transform;
+        tf::StampedTransform transform;
+        pcl::PointCloud<PointT>::Ptr object_cloud_transfered(new pcl::PointCloud<PointT>);
+        listener.waitForTransform(fixed_frame_, filter_frame_, ros::Time(0), ros::Duration(10.0));
+        try
+        {
+            listener.lookupTransform(fixed_frame_, filter_frame_, ros::Time(0), transform);
+            tf::transformTFToEigen(transform, eigen_transform);
+            pcl::transformPointCloud(*cloud_input, *object_cloud_transfered, eigen_transform);
+            std::cout << "Object Point cloud transformed \n";
+        }
+        catch (tf::TransformException ex)
+        {
+            ROS_ERROR("%s", ex.what());
+            return false;
+        }
+        // project object point clouds to ground
+        // Create a set of planar coefficients with X=Y=0,Z=1
+        pcl::ModelCoefficients::Ptr coefficients_project_plane(new pcl::ModelCoefficients());
+        coefficients_project_plane->values.resize(4);
+        coefficients_project_plane->values[0] = coefficients_project_plane->values[1] = 0;
+        coefficients_project_plane->values[2] = 1.0;
+        coefficients_project_plane->values[3] = 0;
+        // Create the filtering object
+        pcl::PointCloud<PointT>::Ptr cloud_projected(new pcl::PointCloud<PointT>);
+        pcl::ProjectInliers<PointT> proj;
+        proj.setModelType(pcl::SACMODEL_PLANE);
+        proj.setInputCloud(object_cloud_transfered);
+        proj.setModelCoefficients(coefficients_project_plane);
+        proj.filter(*cloud_projected);
+        // get object center and polygon
+        chull_.setInputCloud(cloud_projected);
+        chull_.reconstruct(*cloud_hull);
+        Eigen::Vector4f object_center;
+        pcl::compute3DCentroid(*cloud_hull, object_center);
+        std::vector<geometry_msgs::Point32> object_polygon;
+        for (int i = 0; i < cloud_hull->points.size(); i++)
+        {
+            geometry_msgs::Point32 p;
+            p.x = cloud_hull->points[i].x;
+            p.y = cloud_hull->points[i].y;
+            p.z = cloud_hull->points[i].z;
+            object_polygon.push_back(p);
+        }
+        std::cerr << "Concave hull has: " << cloud_hull->points.size()
+                  << " data points." << std::endl;
+
         // record primitives' center to prevent overlap, first number used to record if major primitive detected
         float major_center[4] = {0, 0, 0, 0};
         while (true)
         {
             // coefficients & inliers for cylinder, vertical plane and horizontal plane
             jackal_affordance::Primitive primitive_msg;
-            pcl::ModelCoefficients::Ptr coefficients_cylinder(new pcl::ModelCoefficients), coefficients_plane(new pcl::ModelCoefficients);
-            pcl::PointIndices::Ptr inliers_cylinder(new pcl::PointIndices), inliers_plane(new pcl::PointIndices);
+            pcl::ModelCoefficients::Ptr coefficients_cylinder(new pcl::ModelCoefficients), coefficients_plane(new pcl::ModelCoefficients), coefficients_sphere(new pcl::ModelCoefficients);
+            pcl::PointIndices::Ptr inliers_cylinder(new pcl::PointIndices), inliers_plane(new pcl::PointIndices), inliers_sphere(new pcl::PointIndices);
             pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
             pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
             seg_.setInputCloud(cloud_input);
@@ -186,6 +239,12 @@ class AffordanceDetect
             seg_.setMaxIterations(10000);
             seg_.setDistanceThreshold(0.05);
             seg_.setRadiusLimits(0, 0.1);
+            // Obtain the sphere inliers and coefficients
+            // seg_.setModelType(pcl::SACMODEL_SPHERE);
+            // seg_.setNormalDistanceWeight(0.1);
+            // seg_.setMaxIterations(1000);
+            // seg_.setDistanceThreshold(0.05);
+            // seg_.setRadiusLimits(0, 0.1);
             // Eigen::Vector3f axis = Eigen::Vector3f(0.0, 0.0, 1.0);
             // seg_.setAxis(axis);
             seg_.segment(*inliers_cylinder, *coefficients_cylinder);
@@ -237,7 +296,7 @@ class AffordanceDetect
                 listener.lookupTransform(fixed_frame_, filter_frame_, ros::Time(0), transform);
                 tf::transformTFToEigen(transform, eigen_transform);
                 pcl::transformPointCloud(*cloud_primitive_raw, *cloud_primitive, eigen_transform);
-                std::cout << "Point cloud transformed \n";
+                std::cout << "Primitive Point cloud transformed \n";
             }
             catch (tf::TransformException ex)
             {
@@ -304,6 +363,13 @@ class AffordanceDetect
             {
                 primitive_msg.coef.push_back(coefficients->values[i]);
             }
+
+            // assign object value to primitive
+            primitive_msg.object_center.x = object_center[0];
+            primitive_msg.object_center.y = object_center[1];
+            primitive_msg.object_center.z = object_center[2];
+            primitive_msg.object_polygon = object_polygon;
+
             // Get primitive coefficients
             if (best == 0)
             {

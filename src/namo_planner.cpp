@@ -174,10 +174,11 @@ class NamoPlanner
             return 0;
     }
 
-    void move_straight(float speed, float time)
+    void move_straight(float speed_x, float speed_y, float time)
     {
         geometry_msgs::Twist tw;
-        tw.linear.x = speed;
+        tw.linear.x = speed_x;
+        tw.linear.y = speed_y;
         ros::Time endTime = ros::Time::now() + ros::Duration(time);
         while (ros::Time::now() < endTime)
         {
@@ -237,6 +238,54 @@ class NamoPlanner
         }
         ROS_INFO("NAMO Error: Couldn't find obstacle primitive");
         return 10086;
+    }
+
+    // add pushable object on map to generate geometry information needed for path optimization
+    void planmap_generate(jackal_affordance::Primitive object, nav_msgs::OccupancyGrid map)
+    {
+        /*
+        int size_x = map.info.width;
+        int size_y = map.info.height;
+        cv_bridge::CvImage cv_img_full;
+        cv_img_full.header.frame_id = "map_image";
+        cv_img_full.encoding = sensor_msgs::image_encodings::MONO8;
+        cv::Mat *map_mat = &cv_img_full.image;
+        *map_mat = cv::Mat(size_x, size_y, CV_8U);
+        const std::vector<int8_t> &map_data(map->data);
+
+        unsigned char *map_mat_data_p = (unsigned char *)map_mat.data;
+
+        //We have to flip around the y axis, y for image starts at the top and y for map at the bottom
+        int size_y_rev = size_y - 1;
+
+        for (int y = size_y_rev; y >= 0; --y)
+        {
+
+            int idx_map_y = size_x * (size_y - y);
+            int idx_img_y = size_x * y;
+
+            for (int x = 0; x < size_x; ++x)
+            {
+
+                int idx = idx_img_y + x;
+
+                switch (map_data[idx_map_y + x])
+                {
+                case -1:
+                    map_mat_data_p[idx] = 127;
+                    break;
+
+                case 0:
+                    map_mat_data_p[idx] = 255;
+                    break;
+
+                case 100:
+                    map_mat_data_p[idx] = 0;
+                    break;
+                }
+            }
+        }
+    */
     }
 
     // accept goal, navigate while moving obstacles
@@ -367,14 +416,14 @@ class NamoPlanner
                                     while (ros::Time::now() < endTime)
                                     {
                                         non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
-                                        ros::spinOnce();
+                                        // ros::spinOnce();
                                         ros::Duration(0.1).sleep();
                                     }
                                     // leave obstacle and put arm back
                                     gc_.release();
                                     ros::Duration(1).sleep();
-                                    this->move_straight(-1, 2);
-                                    this->move_straight(0, 1);
+                                    this->move_straight(-1, 0, 2);
+                                    this->move_straight(0, 0, 1);
                                     // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
                                     gc_.grab();
                                     if (!this->move_arm(joint_state_init_))
@@ -408,21 +457,58 @@ class NamoPlanner
                                 if (validate_result.result == 1)
                                 {
                                     ROS_INFO("The obstacle is movable, now moving the obstacle to clear the path");
-                                    this->move_straight(1, 2);
-                                    this->move_straight(0, 1);
-                                    ros::Duration(0.5).sleep();
-                                    this->move_straight(-1, 2);
-                                    this->move_straight(0, 1);
-                                    // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
+
+                                    float length = sqrt((current_primitive.max.x - current_primitive.min.x) * (current_primitive.max.x - current_primitive.min.x) +
+                                                        (current_primitive.max.y - current_primitive.min.y) * (current_primitive.max.y - current_primitive.min.y));
+
                                     if (!this->move_arm(joint_state_init_))
                                     {
                                         ROS_INFO("Failed to move arm back");
                                         return;
                                     }
+
+                                    this->move_straight(-1, 0, 1);
+                                    this->move_straight(-0.5, 1, 2 * (length + 1));
+                                    this->move_straight(1, 0, 3);
+
+                                    double joint_state_straight[] = {0.10, -2.20, 0.04, 0, 1.43};
+
+                                    if (!this->move_arm(joint_state_straight))
+                                    {
+                                        ROS_INFO("Failed to move arm back");
+                                        return;
+                                    }
+
+                                    this->move_straight(-0.5, -1, 4 * (length + 1));
+                                    this->move_straight(-0.5, 1, 2 * (length + 1));
+                                    this->move_straight(0, 0, 1);
+
+                                    if (!this->move_arm(joint_state_init_))
+                                    {
+                                        ROS_INFO("Failed to move arm back");
+                                        return;
+                                    }
+
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
                                     mc.sendGoal(goal);
                                     ros::Duration(0.5).sleep();
+
+                                    // this->move_straight(1, 0, 2);
+                                    // this->move_straight(0, 0, 1);
+                                    // ros::Duration(0.5).sleep();
+                                    // this->move_straight(-1, 0, 2);
+                                    // this->move_straight(0, 0, 1);
+                                    // // float joint_state_back[] = {0.15, -1.56, 0.09, -1.35, -0.3};
+                                    // if (!this->move_arm(joint_state_init_))
+                                    // {
+                                    //     ROS_INFO("Failed to move arm back");
+                                    //     return;
+                                    // }
+                                    // namo_state = 1;
+                                    // ROS_INFO("Sending goal");
+                                    // mc.sendGoal(goal);
+                                    // ros::Duration(0.5).sleep();
                                 }
                                 else
                                 {
@@ -433,7 +519,7 @@ class NamoPlanner
                                     while (ros::Time::now() < endTime)
                                     {
                                         non_movable_point_cloud_pub_.publish(non_movable_point_cloud_);
-                                        ros::spinOnce();
+                                        // ros::spinOnce();
                                         ros::Duration(0.1).sleep();
                                     }
 
@@ -444,8 +530,8 @@ class NamoPlanner
                                         return;
                                     }
 
-                                    this->move_straight(-1, 2);
-                                    this->move_straight(0, 1);
+                                    this->move_straight(-1, 0, 2);
+                                    this->move_straight(0, 0, 1);
 
                                     namo_state = 1;
                                     ROS_INFO("Sending goal");
@@ -460,7 +546,7 @@ class NamoPlanner
                 }
                 break;
             }
-            ros::spinOnce();
+            // ros::spinOnce();
         }
         ROS_INFO("Arrival!");
     }

@@ -8,9 +8,9 @@
        force_sensor_topic: /hsrb/wrist_wrench/raw
        velocity_topic: /hsrb/command_velocity
        arm_trajectory_topic: /hsrb/arm_trajectory_controller/follow_joint_trajectory
-       push_force_max: 45
+       push_force_max: 10000
        lift_force_max: 15
-       force_min: 2
+       force_min: 20
      </rosparam>
    </node>
  </launch>

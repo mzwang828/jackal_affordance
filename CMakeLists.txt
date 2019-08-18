@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(jackal_affordance)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
-  add_compile_options(-std=c++11)
+add_compile_options(-std=c++11 -fext-numeric-literals)
 
 #For debug
 SET( CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x -Winline -gdwarf-2 -g3  " )
@@ -35,7 +35,6 @@ find_package(catkin REQUIRED COMPONENTS
   tmc_robot_kinematics_model
 )
 find_package(Boost REQUIRED COMPONENTS)
-
 
 set(PCL_INCLUDE_DIRS /usr/local/include/pcl-1.8)
 ## System dependencies are found with CMake's conventions
@@ -186,9 +185,10 @@ message("PCL : ${PCL_INCLUDE_DIRS}")
  add_dependencies(verified_cloud_pub ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
- target_link_libraries(affordance_detect   
-${PCL_LIBRARIES}
+target_link_libraries(affordance_detect   
+   ${PCL_LIBRARIES}
    ${catkin_LIBRARIES}
+   ${Boost_LIBRARIES}
  )
 
 target_link_libraries(affordance_validate   
@@ -197,7 +197,7 @@ target_link_libraries(affordance_validate
  )
 
 target_link_libraries(namo_planner   
-${PCL_LIBRARIES}
+   ${PCL_LIBRARIES}
    ${catkin_LIBRARIES}
  )
 
@@ -206,7 +206,7 @@ target_link_libraries(pick_up_test
  )
 
 target_link_libraries(verified_cloud_pub   
-${PCL_LIBRARIES}
+   ${PCL_LIBRARIES}
    ${catkin_LIBRARIES}
  )
 #############

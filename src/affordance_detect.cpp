@@ -40,6 +40,11 @@
 #include <control_msgs/FollowJointTrajectoryAction.h>
 #include <control_msgs/FollowJointTrajectoryGoal.h>
 
+#include <boost/assign.hpp>
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/geometries.hpp>
+#include <boost/geometry/geometries/point_xy.hpp>
+
 #include "jackal_affordance/AffordanceDetect.h"
 #include "jackal_affordance/Object.h"
 #include "jackal_affordance/Primitive.h"
@@ -48,6 +53,7 @@ typedef pcl::PointXYZ PointT;
 typedef pcl::LCCPSegmentation<PointT>::SupervoxelAdjacencyList SuperVoxelAdjacencyList;
 typedef pcl::PointCloud<PointT> PointCloud;
 typedef actionlib::SimpleActionClient<control_msgs::FollowJointTrajectoryAction> TrajectoryClient;
+typedef boost::geometry::model::d2::point_xy<double> xy;
 
 class AffordanceDetect {
    public:
@@ -173,7 +179,7 @@ class AffordanceDetect {
     }
 
     bool cloud_registration() {
-        PointCloud::Ptr temp (new PointCloud);
+        PointCloud::Ptr temp(new PointCloud);
         pcl::PCDWriter writer;
         std::cout << "Start cloud registartion......\n";
         // move head to collect points from diffrent point of view
@@ -337,15 +343,24 @@ class AffordanceDetect {
         object_msg.object_center.x = object_center[0];
         object_msg.object_center.y = object_center[1];
         object_msg.object_center.z = object_center[2];
+        // simplify polygon
+        boost::geometry::model::polygon<xy> polygon_raw;
+        std::vector<xy> vertice;
         for (int i = 0; i < cloud_hull->points.size(); i++) {
+            using namespace boost::assign;
+            vertice += xy(cloud_hull->points[i].x, cloud_hull->points[i].y);
+        }
+        boost::geometry::assign_points(polygon_raw, vertice);
+        boost::geometry::model::polygon<xy> simplified;
+        boost::geometry::simplify(polygon_raw, simplified, 0.06);
+        for (auto it = boost::begin(boost::geometry::exterior_ring(simplified)); it != boost::end(boost::geometry::exterior_ring(simplified)); ++it) {
             geometry_msgs::Point32 p;
-            p.x = cloud_hull->points[i].x;
-            p.y = cloud_hull->points[i].y;
-            p.z = cloud_hull->points[i].z;
+            p.x = boost::geometry::get<0>(*it);
+            p.y = boost::geometry::get<1>(*it);
+            p.z = 0;
             object_msg.object_polygon.push_back(p);
         }
-        std::cout << "Convex hull has: " << cloud_hull->points.size()
-                  << " data points." << std::endl;
+        std::cout << "Convex hull has: " << cloud_hull->points.size() << " -> " << object_msg.object_polygon.size() << " data points." << std::endl;
 
         //DEBUG
         writer.write("/home/mzwang/Desktop/object_cloud.pcd", *object_cloud_transfered, false);

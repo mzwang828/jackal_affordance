@@ -4,8 +4,6 @@
 #include <numeric>
 
 #include <ros/ros.h>
-#include <actionlib/client/simple_action_client.h>
-#include <actionlib/server/simple_action_server.h>
 
 #include <nav_msgs/Path.h>
 #include <actionlib_msgs/GoalID.h>
@@ -25,6 +23,8 @@
 #include "Eigen/Geometry"
 
 // arm relative
+#include <actionlib/client/simple_action_client.h>
+#include <actionlib/server/simple_action_server.h>
 #include <control_msgs/FollowJointTrajectoryAction.h>
 #include <control_msgs/FollowJointTrajectoryGoal.h>
 #include <frasier_utilities/gripper.h>

@@ -75,6 +75,7 @@ set(PCL_INCLUDE_DIRS /usr/local/include/pcl-1.8)
  add_message_files(
    FILES
    Primitive.msg
+   Object.msg
  )
 
 ## Generate services in the 'srv' folder

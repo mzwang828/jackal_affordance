@@ -1,10 +1,10 @@
  <launch>
-   <node pkg="jackal_affordance" type="affordance_detect" name="hsr_affordance_detect" output="screen"> <!--launch-prefix="xterm -geometry 170x30+10+20 -e gdb -x=$(find jackal_affordance)/debug/gdb_jackal_affordance -args" -->
+   <node pkg="jackal_affordance" type="affordance_detect" name="hsr_affordance_detect" output="screen">
      <rosparam>
        info_topic: /hsrb/head_rgbd_sensor/rgb/camera_info
        rgb_topic: /hsrb/head_rgbd_sensor/rgb/image_rect_color
        point_cloud_topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points
-       fixed_frame: /map
+       fixed_frame: /base_link
        min_primitive_size: 100
        max_plane_area: 10
        min_seg_size: 200

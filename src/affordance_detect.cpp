@@ -432,7 +432,7 @@ class AffordanceDetect {
             extract_.setIndices(inliers);
             extract_.filter(*cloud_primitive_raw);
             cloud_primitive = cloud_primitive_raw;
-            
+
             // transform primitive points to fixed frame
             // tf::TransformListener listener;
             // Eigen::Affine3d eigen_transform;
@@ -746,7 +746,7 @@ class AffordanceDetect {
             lccp_labeled_cloud_.header.frame_id = filter_frame_;
             lccp_cloud_pub_.publish(lccp_labeled_cloud_);
 
-            getchar();
+            // getchar();
 
             //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_) {

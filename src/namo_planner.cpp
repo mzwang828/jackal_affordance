@@ -350,9 +350,9 @@ class NamoPlanner
                     {
                         ROS_INFO("Affordance Detect Successfully, find %lu affordance candidate(s)", detect_srv.response.primitives.size());
                         // find the primitive that blocks the trajectory
-                        int obstacle_index = this->which_primitive(traj_coordinate_, detect_srv.response.primitives);
+                        int primitive_index = this->which_primitive(traj_coordinate_, detect_srv.response.primitives);
                         // if no obstacle primitive found, restart whole process
-                        if (obstacle_index == 10086)
+                        if (primitive_index == 10086)
                         {
                             ros::Duration(0.5).sleep();
                             ROS_INFO("Restart NAMO...");
@@ -362,7 +362,15 @@ class NamoPlanner
                             ros::Duration(0.5).sleep();
                             break;
                         }
-                        jackal_affordance::Primitive current_primitive = detect_srv.response.primitives[obstacle_index];
+                        jackal_affordance::Primitive current_primitive = detect_srv.response.primitives[primitive_index];
+                        // print obstacle info
+                        std::cout << "\033[1;32mObstacle index is: \033[0m" << current_primitive.object_index << std::endl;
+                        jackal_affordance::Object obstacle = detect_srv.response.objects[current_primitive.object_index];
+                        std::cout << "Obstacle center is: " << obstacle.object_center.x << ", " << obstacle.object_center.y << "\n";
+                        std::cout << "Polygon: \n";
+                        for (int i = 0; i < obstacle.object_polygon.size(); i++){
+                            std::cout << "(" << obstacle.object_polygon[i].x << ", " << obstacle.object_polygon[i].y << ")\n";
+                        }
                         // for cylinders
                         if (current_primitive.type == 3)
                         {
@@ -457,7 +465,9 @@ class NamoPlanner
                                 if (validate_result.result == 1)
                                 {
                                     ROS_INFO("The obstacle is movable, now moving the obstacle to clear the path");
-
+                                    getchar();
+                                    
+                                    /*
                                     float length = sqrt((current_primitive.max.x - current_primitive.min.x) * (current_primitive.max.x - current_primitive.min.x) +
                                                         (current_primitive.max.y - current_primitive.min.y) * (current_primitive.max.y - current_primitive.min.y));
 
@@ -509,6 +519,7 @@ class NamoPlanner
                                     // ROS_INFO("Sending goal");
                                     // mc.sendGoal(goal);
                                     // ros::Duration(0.5).sleep();
+                                    */
                                 }
                                 else
                                 {

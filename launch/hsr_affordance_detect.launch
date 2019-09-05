@@ -4,7 +4,7 @@
        info_topic: /hsrb/head_rgbd_sensor/rgb/camera_info
        rgb_topic: /hsrb/head_rgbd_sensor/rgb/image_rect_color
        point_cloud_topic: /hsrb/head_rgbd_sensor/depth_registered/rectified_points
-       fixed_frame: /base_link
+       fixed_frame: /map
        min_primitive_size: 100
        max_plane_area: 10
        min_seg_size: 200

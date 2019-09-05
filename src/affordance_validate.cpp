@@ -440,7 +440,6 @@ class AffordanceValidate
             ROS_INFO("Failed to move to obstacle position");
             return;
         }
-        /*
         // move arm back to original position
         ros::Duration(1).sleep();
         geometry_msgs::Twist tw;
@@ -458,7 +457,7 @@ class AffordanceValidate
             ROS_INFO("Failed to move arm back");
             return;
         }
-        */
+
         action_result_.result = result_;
         ROS_INFO("%s: Action Executed Succeeded", action_name_.c_str());
         // set the action state to succeeded

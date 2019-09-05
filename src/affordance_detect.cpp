@@ -146,6 +146,7 @@ class AffordanceDetect {
     bool pair_align(const PointCloud::Ptr cloud_src, const PointCloud::Ptr cloud_tgt, PointCloud::Ptr output, bool downsample = false) {
         // Downsample for consistency and speed
         // Only enable this for large datasets
+        std::cout << "\033[1;32mAD: Pair alignment start...\033[0m\n";
         PointCloud::Ptr src(new PointCloud);
         PointCloud::Ptr tgt(new PointCloud);
         pcl::VoxelGrid<PointT> grid;
@@ -175,6 +176,7 @@ class AffordanceDetect {
         targetToSource = Ti.inverse();
         pcl::transformPointCloud(*cloud_tgt, *output, targetToSource);
         *output += *cloud_src;
+        std::cout << "\033[1;32mAD: Pair alignment end...\033[0m\n";
         return true;
     }
 
@@ -241,7 +243,7 @@ class AffordanceDetect {
             std::cout << "AD: couldn't transform point cloud!" << std::endl;
             return false;
         }
-        if (!pair_align(cloud_transformed_, cloud_registered_, temp, false)) {
+        if (!pair_align(cloud_transformed_, cloud_registered_, temp, true)) {
             std::cout << "AD: cloud registration failed!\n";
             return false;
         }
@@ -256,7 +258,7 @@ class AffordanceDetect {
             std::cout << "AD: couldn't transform point cloud!" << std::endl;
             return false;
         }
-        if (!pair_align(cloud_transformed_, cloud_registered_, temp, false)) {
+        if (!pair_align(cloud_transformed_, cloud_registered_, temp, true)) {
             std::cout << "AD: cloud registration failed!\n";
             return false;
         }
@@ -265,7 +267,6 @@ class AffordanceDetect {
         head_goal.trajectory.points[0].positions[0] = 0.0;
         head_tc.sendGoal(head_goal);
         head_tc.waitForResult(ros::Duration(5.0));
-        writer.write("/home/mzwang/Desktop/registered_cloud.pcd", *cloud_registered_, false);
         return true;
     }
 
@@ -290,21 +291,6 @@ class AffordanceDetect {
         pcl::PointCloud<PointT>::Ptr cloud_primitive(new pcl::PointCloud<PointT>);
         pcl::PointCloud<PointT>::Ptr cloud_hull(new pcl::PointCloud<PointT>);
         pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
-        // Estimate point normals
-        ne_.setSearchMethod(tree_);
-        ne_.setInputCloud(cloud_input);
-        ne_.setKSearch(50);
-        ne_.compute(*cloud_normals);
-        // Create the segmentation object
-        // Optional
-        seg_.setOptimizeCoefficients(true);
-        seg_.setMaxIterations(1000);  // iteration limits decides segmentation goodness
-        seg_.setMethodType(pcl::SAC_RANSAC);
-        seg_.setDistanceThreshold(0.02);
-        seg_.setNormalDistanceWeight(0.1);
-        int no_primitives = 0;
-
-        // Calculate object center and its polygon
         // transform object points to fixed frame
         tf::TransformListener listener;
         Eigen::Affine3d eigen_transform;
@@ -320,6 +306,22 @@ class AffordanceDetect {
             ROS_ERROR("%s", ex.what());
             return false;
         }
+
+        // Estimate point normals
+        ne_.setSearchMethod(tree_);
+        ne_.setInputCloud(object_cloud_transfered);
+        ne_.setKSearch(50);
+        ne_.compute(*cloud_normals);
+        // Create the segmentation object
+        // Optional
+        seg_.setOptimizeCoefficients(true);
+        seg_.setMaxIterations(1000);  // iteration limits decides segmentation goodness
+        seg_.setMethodType(pcl::SAC_RANSAC);
+        seg_.setDistanceThreshold(0.02);
+        seg_.setNormalDistanceWeight(0.1);
+        int no_primitives = 0;
+
+        // Calculate object center and its polygon
         // project object point clouds to ground
         // Create a set of planar coefficients with X=Y=0,Z=1
         pcl::ModelCoefficients::Ptr coefficients_project_plane(new pcl::ModelCoefficients());
@@ -376,7 +378,7 @@ class AffordanceDetect {
             pcl::PointIndices::Ptr inliers_cylinder(new pcl::PointIndices), inliers_plane(new pcl::PointIndices), inliers_sphere(new pcl::PointIndices);
             pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
             pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
-            seg_.setInputCloud(cloud_input);
+            seg_.setInputCloud(object_cloud_transfered);
             seg_.setInputNormals(cloud_normals);
             // Obtain the plane inliers and coefficients
             seg_.setModelType(pcl::SACMODEL_NORMAL_PLANE);
@@ -420,30 +422,31 @@ class AffordanceDetect {
             if (inliers->indices.size() == 0 and no_primitives == 0) {
                 std::cout << "PS: no primitive found!!!" << std::endl;
                 return false;
-            } else if ((inliers->indices.size() < min_primitive_size_) || (float(inliers->indices.size()) / float((initial_size)) < 0.2)) {
+            } else if ((inliers->indices.size() < min_primitive_size_) || (float(inliers->indices.size()) / float((initial_size)) < 0.1)) {
                 ROS_INFO("Inliers doesn't meet requirement: inliers: %d, initial: %d", inliers->indices.size(), initial_size);
                 break;
             }
             // generate the primitive msg
-            extract_.setInputCloud(cloud_input);
+            extract_.setInputCloud(object_cloud_transfered);
             extract_.setNegative(false);
             extract_.setIndices(inliers);
             extract_.filter(*cloud_primitive_raw);
-
+            cloud_primitive = cloud_primitive_raw;
+            
             // transform primitive points to fixed frame
-            tf::TransformListener listener;
-            Eigen::Affine3d eigen_transform;
-            tf::StampedTransform transform;
-            listener.waitForTransform(fixed_frame_, filter_frame_, ros::Time(0), ros::Duration(10.0));
-            try {
-                listener.lookupTransform(fixed_frame_, filter_frame_, ros::Time(0), transform);
-                tf::transformTFToEigen(transform, eigen_transform);
-                pcl::transformPointCloud(*cloud_primitive_raw, *cloud_primitive, eigen_transform);
-                std::cout << "Primitive Point cloud transformed \n";
-            } catch (tf::TransformException ex) {
-                ROS_ERROR("%s", ex.what());
-                return false;
-            }
+            // tf::TransformListener listener;
+            // Eigen::Affine3d eigen_transform;
+            // tf::StampedTransform transform;
+            // listener.waitForTransform(fixed_frame_, filter_frame_, ros::Time(0), ros::Duration(10.0));
+            // try {
+            //     listener.lookupTransform(fixed_frame_, filter_frame_, ros::Time(0), transform);
+            //     tf::transformTFToEigen(transform, eigen_transform);
+            //     pcl::transformPointCloud(*cloud_primitive_raw, *cloud_primitive, eigen_transform);
+            //     std::cout << "Primitive Point cloud transformed \n";
+            // } catch (tf::TransformException ex) {
+            //     ROS_ERROR("%s", ex.what());
+            //     return false;
+            // }
 
             chull_.setInputCloud(cloud_primitive);
             //chull_.setDimension(2);
@@ -555,9 +558,9 @@ class AffordanceDetect {
                 no_primitives++;
             }
 
-            // remve primitive clouds
+            // remove primitive clouds
             extract_.setNegative(true);
-            extract_.filter(*cloud_input);
+            extract_.filter(*object_cloud_transfered);
             extract_normals_.setNegative(true);
             extract_normals_.setInputCloud(cloud_normals);
             extract_normals_.setIndices(inliers);
@@ -743,7 +746,7 @@ class AffordanceDetect {
             lccp_labeled_cloud_.header.frame_id = filter_frame_;
             lccp_cloud_pub_.publish(lccp_labeled_cloud_);
 
-            // getchar();
+            getchar();
 
             //Find Primitives in one of Segmentations
             if (cloud_temp->size() > min_seg_size_) {
@@ -771,6 +774,7 @@ class AffordanceDetect {
 
     bool affordance_detect_callback(jackal_affordance::AffordanceDetect::Request &req,
                                     jackal_affordance::AffordanceDetect::Response &res) {
+        std::cout << "\033[1;32mAD: Affordance detection start...\033[0m\n";
         if (!cloud_registration()) {
             std::cout << "AD: cloud registration failed!" << std::endl;
             return false;

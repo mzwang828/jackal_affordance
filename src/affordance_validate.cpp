@@ -285,29 +285,61 @@ class AffordanceValidate
         // with tmc functions/controllers
         //MoveBaseClient ac("/move_base/move", true);
         // with pure ros move base
-        MoveBaseClient ac("/move_base", true);
 
-        move_base_msgs::MoveBaseGoal move_goal;
-        move_goal.target_pose.header.frame_id = fixed_frame_;
-        move_goal.target_pose.header.stamp = ros::Time::now();
+    
+        // MoveBaseClient ac("/move_base", true);
+
+        // move_base_msgs::MoveBaseGoal move_goal;
+        // move_goal.target_pose.header.frame_id = fixed_frame_;
+        // move_goal.target_pose.header.stamp = ros::Time::now();
+        // // normal vector here: for plane, normal vector is normal to the plane; for cylinder, normal vector is the
+        // // vector poinitng from robot to the center of cylinder.
+        // move_goal.target_pose.pose.position.x = goal->center.x - goal->normal[0];
+        // move_goal.target_pose.pose.position.y = goal->center.y - goal->normal[1];
+        // double normal[3] = {goal->normal[0], goal->normal[1], goal->normal[2]};
+        // move_goal.target_pose.pose.orientation = this->calculate_quaternion(normal);
+
+        // while (!ac.waitForServer(ros::Duration(5.0)))
+        // {
+        //     ROS_INFO("Waiting for the move_base action server to come up");
+        // }
+        
+        
+        // std::cout << "Sending goal: " << move_goal.target_pose.pose.position.x << ", " <<  move_goal.target_pose.pose.position.y << "\n";
+        // std::cout << "OrientationL: " << move_goal.target_pose.pose.orientation.x << ", " << move_goal.target_pose.pose.orientation.y <<
+        // ", " << move_goal.target_pose.pose.orientation.z << ", " << move_goal.target_pose.pose.orientation.w << "\n";
+
+        // ros::spinOnce();
+        // ac.sendGoal(move_goal);
+        // ac.waitForResult();
+
+        ros::Publisher goal_pub = nh_.advertise<move_base_msgs::MoveBaseActionGoal>("/move_base/goal", 1000);
+        ros::Duration(2.0).sleep();
+        // move_base_msgs::MoveBaseGoal move_goal;
+        move_base_msgs::MoveBaseActionGoal move_goal;
+        move_goal.goal.target_pose.header.frame_id = fixed_frame_;
+        move_goal.goal.target_pose.header.stamp = ros::Time::now();
         // normal vector here: for plane, normal vector is normal to the plane; for cylinder, normal vector is the
         // vector poinitng from robot to the center of cylinder.
-        move_goal.target_pose.pose.position.x = goal->center.x - goal->normal[0];
-        move_goal.target_pose.pose.position.y = goal->center.y - goal->normal[1];
+        move_goal.goal.target_pose.pose.position.x = goal->center.x - goal->normal[0];
+        move_goal.goal.target_pose.pose.position.y = goal->center.y - goal->normal[1];
         double normal[3] = {goal->normal[0], goal->normal[1], goal->normal[2]};
-        move_goal.target_pose.pose.orientation = this->calculate_quaternion(normal);
+        move_goal.goal.target_pose.pose.orientation = this->calculate_quaternion(normal);
 
-        while (!ac.waitForServer(ros::Duration(5.0)))
-        {
-            ROS_INFO("Waiting for the move_base action server to come up");
-        }
+        std::cout << "Moving to obstacle...\n";
 
-        ROS_INFO("Sending goal");
-        ac.sendGoal(move_goal);
-        ac.waitForResult();
+        ros::spinOnce();
+        goal_pub.publish(move_goal);
+        ros::spinOnce();
 
-        if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
-        {
+        std::cout << "Sending goal: " << move_goal.goal.target_pose.pose.position.x << ", " <<  move_goal.goal.target_pose.pose.position.y << "\n";
+        std::cout << "OrientationL: " << move_goal.goal.target_pose.pose.orientation.x << ", " << move_goal.goal.target_pose.pose.orientation.y <<
+        ", " << move_goal.goal.target_pose.pose.orientation.z << ", " << move_goal.goal.target_pose.pose.orientation.w << "\n";
+
+        getchar();
+
+        // if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
+        // {
             float joint_state[] = {0, 0, 0, 0, 0};
             if (!this->solve_ik(goal->center, joint_state))
             {
@@ -407,7 +439,7 @@ class AffordanceValidate
                 while ((force_[2] - force_at_start) < force_min_)
                 {
                     velocity_pub_.publish(tw);
-                    // ROS_INFO("Force difference: %f", force_[2] - force_at_start);
+                    ROS_INFO("Force difference: %f", force_[2] - force_at_start);
                 }
                 tw.linear.x = 0.0;
                 velocity_pub_.publish(tw);
@@ -429,34 +461,42 @@ class AffordanceValidate
                 tw.linear.x = 0.0;
                 velocity_pub_.publish(tw);
                 ros::Duration(1).sleep();
+                // move arm back
+                ros::Duration(1).sleep();
+                tw.linear.x = -0.1;
+                velocity_pub_.publish(tw);
+                ros::Duration(0.5).sleep();
+                tw.linear.x = 0;
+                velocity_pub_.publish(tw);
+                ros::Duration(1).sleep();
+                float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
+                ros::Duration(1).sleep();
+                if (!this->move_arm(joint_state_back))
+                {
+                    ROS_INFO("Failed to move arm back");
+                    return;
+                }
 
                 break;
                 // }
             }
             }
-        }
-        else
-        {
-            ROS_INFO("Failed to move to obstacle position");
-            return;
-        }
+        // }
+        // else
+        // {
+        //     // ROS_INFO("Failed to move to obstacle position");
+        //     // return;
+        //     getchar();
+        // }
         // move arm back to original position
-        ros::Duration(1).sleep();
-        geometry_msgs::Twist tw;
-        tw.linear.x = -1;
-        velocity_pub_.publish(tw);
-        ros::Duration(1).sleep();
-        tw.linear.x = 0;
-        velocity_pub_.publish(tw);
-        ros::Duration(1).sleep();
-        float joint_state_back[] = {0.05, 0, -1.57, -1.57, 0};
-        gc_.grab();
-        ros::Duration(1).sleep();
-        if (!this->move_arm(joint_state_back))
-        {
-            ROS_INFO("Failed to move arm back");
-            return;
-        }
+        // ros::Duration(1).sleep();
+        // geometry_msgs::Twist tw;
+        // tw.linear.x = -1;
+        // velocity_pub_.publish(tw);
+        // ros::Duration(1).sleep();
+        // tw.linear.x = 0;
+        // velocity_pub_.publish(tw);
+        // ros::Duration(1).sleep();
 
         action_result_.result = result_;
         ROS_INFO("%s: Action Executed Succeeded", action_name_.c_str());

@@ -171,7 +171,7 @@ class AffordanceDetect {
         reg.setInputTarget(tgt);
         Eigen::Matrix4f Ti = Eigen::Matrix4f::Identity(), prev, targetToSource;
         PointCloud::Ptr reg_result = src;
-        reg.setMaximumIterations(30);
+        reg.setMaximumIterations(20);
         reg.align(*reg_result);
         targetToSource = Ti.inverse();
         pcl::transformPointCloud(*cloud_tgt, *output, targetToSource);
@@ -216,13 +216,13 @@ class AffordanceDetect {
         head_goal.trajectory.points[0].positions.resize(2);
         head_goal.trajectory.points[0].velocities.resize(2);
         head_goal.trajectory.points[0].positions[0] = 0;
-        head_goal.trajectory.points[0].positions[1] = -0.5;
+        head_goal.trajectory.points[0].positions[1] = -0.76;
         for (size_t i = 0; i < 2; ++i) {
             head_goal.trajectory.points[0].velocities[i] = 0.0;
         }
         head_goal.trajectory.points[0].time_from_start = ros::Duration(3.0);
-        arm_tc.sendGoal(arm_goal);
-        arm_tc.waitForResult(ros::Duration(5.0));
+        // arm_tc.sendGoal(arm_goal);
+        // arm_tc.waitForResult(ros::Duration(5.0));
         // Pose 1, center
         head_tc.sendGoal(head_goal);
         head_tc.waitForResult(ros::Duration(5.0));
@@ -249,7 +249,7 @@ class AffordanceDetect {
         }
         *cloud_registered_ = *temp;
         // Pose 3, left
-        head_goal.trajectory.points[0].positions[0] = 0.36;
+        head_goal.trajectory.points[0].positions[0] = 0.30;
         head_tc.sendGoal(head_goal);
         head_tc.waitForResult(ros::Duration(5.0));
         ros::Duration(0.5).sleep();
@@ -267,6 +267,19 @@ class AffordanceDetect {
         head_goal.trajectory.points[0].positions[0] = 0.0;
         head_tc.sendGoal(head_goal);
         head_tc.waitForResult(ros::Duration(5.0));
+        // Reset Arm
+        std::cout << "AD: Reset Arm...";
+        arm_goal.trajectory.points[0].positions[0] = 0.05;
+        arm_goal.trajectory.points[0].positions[1] = 0;
+        arm_goal.trajectory.points[0].positions[2] = -1.57;
+        arm_goal.trajectory.points[0].positions[3] = -1.57;
+        arm_goal.trajectory.points[0].positions[4] = 0;
+        for (size_t i = 0; i < 2; ++i) {
+            head_goal.trajectory.points[0].velocities[i] = 0.0;
+        }
+        head_goal.trajectory.points[0].time_from_start = ros::Duration(3.0);
+        // arm_tc.sendGoal(arm_goal);
+        // arm_tc.waitForResult(ros::Duration(5.0));
         return true;
     }
 
@@ -277,8 +290,13 @@ class AffordanceDetect {
 
     bool primitive_segmentation(std::vector<jackal_affordance::Primitive> &primitives, pcl::PointCloud<PointT>::Ptr cloud_input) {
         pcl::PCDWriter writer;
-        writer.write("/home/mzwang/Desktop/original_cloud.pcd", *cloud_input, false);
-
+        // writer.write("/home/mzwang/Desktop/original_cloud.pcd", *cloud_input, false);
+        if (cloud_input->size() > 60000) {
+            pcl::VoxelGrid<PointT> grid;
+            grid.setLeafSize(0.05, 0.05, 0.05);
+            grid.setInputCloud(cloud_input);
+            grid.filter(*cloud_input);
+        }
         // remove outliers
         pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_noise;
         sor_noise.setInputCloud(cloud_input);
@@ -365,9 +383,9 @@ class AffordanceDetect {
         std::cout << "Convex hull has: " << cloud_hull->points.size() << " -> " << object_msg.object_polygon.size() << " data points." << std::endl;
 
         //DEBUG
-        writer.write("/home/mzwang/Desktop/object_cloud.pcd", *object_cloud_transfered, false);
-        writer.write("/home/mzwang/Desktop/project_cloud.pcd", *cloud_projected, false);
-        writer.write("/home/mzwang/Desktop/cloud_hull.pcd", *cloud_hull, false);
+        // writer.write("/home/mzwang/Desktop/object_cloud.pcd", *object_cloud_transfered, false);
+        // writer.write("/home/mzwang/Desktop/project_cloud.pcd", *cloud_projected, false);
+        // writer.write("/home/mzwang/Desktop/cloud_hull.pcd", *cloud_hull, false);
 
         // record primitives' center to prevent overlap, first number used to record if major primitive detected
         float major_center[4] = {0, 0, 0, 0};

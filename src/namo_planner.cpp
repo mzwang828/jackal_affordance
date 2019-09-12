@@ -228,7 +228,6 @@ class NamoPlanner
                 double distance_radius = sqrt((traj_vector[0] * traj_vector[0] + traj_vector[1] * traj_vector[1]));
                 // DEBUG: check distance
                 ROS_INFO("distance from cylinder center %f, inflation area %f", distance_radius, current_primitive.coef[6] + inflation_radius_);
-                getchar();
                 if (distance_radius < (current_primitive.coef[6] + inflation_radius_))
                 {
                     ROS_INFO("Found obstacle primitive (Cylinder)");
